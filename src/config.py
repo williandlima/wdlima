@@ -93,6 +93,18 @@ class LoggingConfig:
 
 
 @dataclass(frozen=True)
+class SecurityConfig:
+    """Trava de acesso simples para ações destrutivas na GUI (ex.: excluir
+    operador do histórico). Não é autenticação de verdade (senha única,
+    compartilhada, em texto puro no YAML) -- só um freio contra clique
+    acidental/uso indevido por quem não é responsável pelo laboratório,
+    consistente com o nível de risco real da ação (ver
+    OperatorRepository.delete: o banco já impede apagar histórico de
+    ensaio de verdade, então isto é só uma segunda trava, não a única)."""
+    operator_delete_password: str = "lab1"
+
+
+@dataclass(frozen=True)
 class BrandingConfig:
     company_name: str
     logo_path: Path
@@ -151,6 +163,7 @@ class AppConfig:
     logging: LoggingConfig
     branding: BrandingConfig
     instrument: InstrumentConfig
+    security: SecurityConfig
     raw: dict[str, Any] = field(repr=False, compare=False)
 
 
@@ -236,6 +249,11 @@ def load_config(config_path: Path | None = None, create_dirs: bool = True) -> Ap
         color_warning=branding_raw["color_warning"],
     )
 
+    security_raw = raw.get("security", {}) or {}
+    security = SecurityConfig(
+        operator_delete_password=security_raw.get("operator_delete_password", "lab1"),
+    )
+
     return AppConfig(
         paths=PathsConfig(
             data_dir=data_dir,
@@ -249,5 +267,6 @@ def load_config(config_path: Path | None = None, create_dirs: bool = True) -> Ap
         logging=logging_cfg,
         branding=branding,
         instrument=instrument,
+        security=security,
         raw=raw,
     )

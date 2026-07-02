@@ -22,11 +22,13 @@ class RegistrationView(QtWidgets.QWidget):
         self,
         operator_repo: OperatorRepository,
         board_repo: BoardRepository,
+        operator_delete_password: str = "lab1",
         parent: QtWidgets.QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self._operator_repo = operator_repo
         self._board_repo = board_repo
+        self._operator_delete_password = operator_delete_password
 
         title_label = QtWidgets.QLabel("Cadastro do ensaio")
         title_label.setObjectName("viewTitle")
@@ -125,29 +127,47 @@ class RegistrationView(QtWidgets.QWidget):
         for operator in self._operator_repo.list_all():
             self.operator_combo.addItem(operator.name, userData=operator)
 
+    def _selected_operator(self) -> Operator | None:
+        """Resolve o operador atualmente escolhido no combo pelo TEXTO
+        exibido, não por currentIndex() -- o combo é editável
+        (setEditable(True)), e currentIndex() fica desatualizado/-1 depois
+        de digitação ou de clear_form(), mesmo com um nome válido ainda
+        visível no campo. Usar currentIndex() diretamente (bug corrigido
+        aqui) fazia "Excluir" achar que nada estava selecionado e não
+        fazer nada, silenciosamente."""
+        index = self.operator_combo.findText(self.operator_combo.currentText())
+        return self.operator_combo.itemData(index) if index >= 0 else None
+
     def _on_delete_operator(self) -> None:
         """Remove um cadastro duplicado/errado -- ver "duvida" do usuário
         sobre limpar operadores/testes carregados: não existia forma de
         fazer isso pela GUI, só editando o banco direto. Bloqueado pelo
         próprio banco (RecordInUseError) se o operador já tiver ensaios
-        registrados -- nunca apaga histórico de teste de verdade."""
-        index = self.operator_combo.currentIndex()
-        operator: Operator | None = self.operator_combo.itemData(index) if index >= 0 else None
+        registrados -- nunca apaga histórico de teste de verdade.
+
+        Pede a senha do laboratório (config `security.operator_delete_password`)
+        antes de excluir -- trava simples contra clique acidental, não
+        autenticação de verdade; a proteção real contra perda de dados já é
+        o bloqueio de FK do banco."""
+        operator = self._selected_operator()
         if operator is None:
             QtWidgets.QMessageBox.warning(
                 self, "Nenhum operador selecionado",
                 "Escolha um operador já cadastrado no campo acima para excluir.",
             )
             return
-        confirm = QtWidgets.QMessageBox.question(
+        password, confirmed = QtWidgets.QInputDialog.getText(
             self,
-            "Confirmar exclusão",
-            f'Excluir o operador "{operator.name}" do histórico?\n\n'
-            "Só é possível se ele nunca tiver sido usado em um ensaio registrado.",
-            QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No,
-            QtWidgets.QMessageBox.StandardButton.No,
+            "Senha necessária",
+            f'Digite a senha para excluir o operador "{operator.name}":',
+            QtWidgets.QLineEdit.EchoMode.Password,
         )
-        if confirm != QtWidgets.QMessageBox.StandardButton.Yes:
+        if not confirmed:
+            return
+        if password != self._operator_delete_password:
+            QtWidgets.QMessageBox.warning(
+                self, "Senha incorreta", "Senha incorreta -- operador não foi excluído."
+            )
             return
         try:
             self._operator_repo.delete(operator.id)

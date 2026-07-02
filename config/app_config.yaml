@@ -91,6 +91,14 @@ logging:
   backup_count: 5
   ui_log_buffer_lines: 200
 
+# Trava simples contra clique acidental/uso indevido em ações destrutivas da
+# GUI (hoje só excluir operador do histórico). NÃO é autenticação de verdade
+# (senha única compartilhada, em texto puro aqui) -- o banco já impede
+# apagar histórico de ensaio de verdade (ver OperatorRepository.delete),
+# então isto é só uma segunda trava. Troque à vontade.
+security:
+  operator_delete_password: "lab1"
+
 branding:
   company_name: "Avibras Aeroco"
   logo_path: "assets/branding/avibras_aeroco_logo.png"

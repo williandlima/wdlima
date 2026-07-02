@@ -167,6 +167,76 @@ def test_delete_operator_blocked_when_used_by_a_test_session(qtbot, tmp_path: Pa
     db.close()
 
 
+def test_operator_combo_uses_popup_completion_not_silent_inline_completion(
+    qtbot, tmp_path: Path
+) -> None:
+    """Qt liga InlineCompletion por padrão em combos editáveis -- completa o
+    texto digitado SILENCIOSAMENTE com o candidato mais próximo do histórico.
+    Com nomes parecidos no histórico (ex.: "Willian" e "Willian - 0132"), isso
+    pode preencher o campo com o nome ERRADO antes de excluir, sem o operador
+    perceber. PopupCompletion nunca altera o campo sozinho."""
+    db = Database(tmp_path / "completer_mode.db")
+    db.connect()
+    view = RegistrationView(OperatorRepository(db), BoardRepository(db))
+    qtbot.addWidget(view)
+
+    completer = view.operator_combo.completer()
+    assert completer is not None
+    assert completer.completionMode() == QtWidgets.QCompleter.CompletionMode.PopupCompletion
+    db.close()
+
+
+def test_delete_operator_with_similar_named_entries_only_deletes_the_exact_match(
+    qtbot, tmp_path: Path
+) -> None:
+    """Reproduz o cenário relatado em campo: "Willian" e "Willian - 0132" são
+    registros DIFERENTES no histórico (ex.: um digitado só com o nome, outro
+    combinando nome+IF por engano no campo errado). Excluir "Willian" não
+    pode apagar/afetar "Willian - 0132", e vice-versa."""
+    db = Database(tmp_path / "similar_names.db")
+    db.connect()
+    operator_repo = OperatorRepository(db)
+    operator_repo.get_or_create("Willian")
+    operator_repo.get_or_create("Willian - 0132")
+    view = RegistrationView(operator_repo, BoardRepository(db), _PASSWORD)
+    qtbot.addWidget(view)
+
+    view.operator_combo.setEditText("Willian")  # texto EXATO, sem o sufixo
+    assert view._selected_operator().name == "Willian"  # resolve o registro certo
+
+    with _enter_password(_PASSWORD):
+        view.delete_operator_button.click()
+
+    remaining = [o.name for o in operator_repo.list_all()]
+    assert remaining == ["Willian - 0132"]  # só o digitado sumiu
+    db.close()
+
+
+def test_delete_operator_password_prompt_shows_if_number_to_disambiguate(
+    qtbot, tmp_path: Path
+) -> None:
+    """A mensagem do prompt de senha mostra nome + IF (não só o nome) --
+    dois registros parecidos ("Willian" x "Willian - 0132") viram
+    inequívocos quando o IF aparece junto, antes de confirmar a exclusão."""
+    db = Database(tmp_path / "prompt_identity.db")
+    db.connect()
+    operator_repo = OperatorRepository(db)
+    operator_repo.get_or_create("Willian", if_number="0132")
+    view = RegistrationView(operator_repo, BoardRepository(db), _PASSWORD)
+    qtbot.addWidget(view)
+    view.operator_combo.setCurrentIndex(0)
+
+    with patch.object(
+        QtWidgets.QInputDialog, "getText", return_value=(_PASSWORD, True)
+    ) as mock_get_text:
+        view.delete_operator_button.click()
+
+    prompt_text = mock_get_text.call_args.args[2]
+    assert "Willian" in prompt_text
+    assert "0132" in prompt_text
+    db.close()
+
+
 # -- Configuração salva (Parâmetros) ------------------------------------------
 
 

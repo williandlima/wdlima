@@ -35,7 +35,18 @@ def _confirm_yes():
     )
 
 
+def _enter_password(password: str, confirmed: bool = True):
+    """Mocka o prompt de senha (RegistrationView._on_delete_operator) --
+    sem isso o QInputDialog.getText() real trava esperando input do usuário
+    e o teste nunca termina."""
+    return patch.object(
+        QtWidgets.QInputDialog, "getText", return_value=(password, confirmed)
+    )
+
+
 # -- Operador (Cadastro) ------------------------------------------------------
+
+_PASSWORD = "lab1"  # default de RegistrationView (config security.operator_delete_password)
 
 
 def test_delete_operator_removes_unused_entry_from_combo(qtbot, tmp_path: Path) -> None:
@@ -43,15 +54,40 @@ def test_delete_operator_removes_unused_entry_from_combo(qtbot, tmp_path: Path) 
     db.connect()
     operator_repo = OperatorRepository(db)
     operator_repo.get_or_create("Duplicado")
-    view = RegistrationView(operator_repo, BoardRepository(db))
+    view = RegistrationView(operator_repo, BoardRepository(db), _PASSWORD)
     qtbot.addWidget(view)
     assert view.operator_combo.count() == 1
 
     view.operator_combo.setCurrentIndex(0)
-    with _confirm_yes():
+    with _enter_password(_PASSWORD):
         view.delete_operator_button.click()
 
     assert view.operator_combo.count() == 0
+    assert operator_repo.list_all() == []
+    db.close()
+
+
+def test_delete_operator_resolves_by_typed_text_not_stale_current_index(
+    qtbot, tmp_path: Path
+) -> None:
+    """Reproduz o bug relatado em campo: currentIndex() pode ficar -1/
+    desatualizado num combo editável mesmo com um nome válido digitado no
+    campo (ex.: depois de clear_form()) -- "Excluir" tinha ficado mudo
+    (achava que nada estava selecionado) porque resolvia pelo índice em
+    vez do texto exibido."""
+    db = Database(tmp_path / "del_operator_by_text.db")
+    db.connect()
+    operator_repo = OperatorRepository(db)
+    operator_repo.get_or_create("Digitado")
+    view = RegistrationView(operator_repo, BoardRepository(db), _PASSWORD)
+    qtbot.addWidget(view)
+
+    view.clear_form()  # currentIndex() vira -1, como no fluxo real
+    view.operator_combo.setEditText("Digitado")  # simula o operador digitando
+
+    with _enter_password(_PASSWORD):
+        view.delete_operator_button.click()
+
     assert operator_repo.list_all() == []
     db.close()
 
@@ -72,6 +108,39 @@ def test_delete_operator_with_nothing_selected_warns_and_does_not_crash(
     db.close()
 
 
+def test_delete_operator_with_wrong_password_is_not_deleted(qtbot, tmp_path: Path) -> None:
+    db = Database(tmp_path / "del_operator_wrong_pw.db")
+    db.connect()
+    operator_repo = OperatorRepository(db)
+    operator_repo.get_or_create("Protegido")
+    view = RegistrationView(operator_repo, BoardRepository(db), _PASSWORD)
+    qtbot.addWidget(view)
+    view.operator_combo.setCurrentIndex(0)
+
+    with _enter_password("senha-errada"), patch.object(QtWidgets.QMessageBox, "warning") as mock_warning:
+        view.delete_operator_button.click()
+
+    mock_warning.assert_called_once()
+    assert operator_repo.list_all() != []  # não foi excluído
+    db.close()
+
+
+def test_delete_operator_cancelled_password_prompt_is_not_deleted(qtbot, tmp_path: Path) -> None:
+    db = Database(tmp_path / "del_operator_cancel.db")
+    db.connect()
+    operator_repo = OperatorRepository(db)
+    operator_repo.get_or_create("Protegido")
+    view = RegistrationView(operator_repo, BoardRepository(db), _PASSWORD)
+    qtbot.addWidget(view)
+    view.operator_combo.setCurrentIndex(0)
+
+    with _enter_password("", confirmed=False):
+        view.delete_operator_button.click()
+
+    assert operator_repo.list_all() != []
+    db.close()
+
+
 def test_delete_operator_blocked_when_used_by_a_test_session(qtbot, tmp_path: Path) -> None:
     db = Database(tmp_path / "del_operator_blocked.db")
     db.connect()
@@ -86,11 +155,11 @@ def test_delete_operator_blocked_when_used_by_a_test_session(qtbot, tmp_path: Pa
             observations=None, status=TestSessionStatus.COMPLETED,
         )
     )
-    view = RegistrationView(operator_repo, board_repo)
+    view = RegistrationView(operator_repo, board_repo, _PASSWORD)
     qtbot.addWidget(view)
     view.operator_combo.setCurrentIndex(0)
 
-    with _confirm_yes(), patch.object(QtWidgets.QMessageBox, "warning") as mock_warning:
+    with _enter_password(_PASSWORD), patch.object(QtWidgets.QMessageBox, "warning") as mock_warning:
         view.delete_operator_button.click()
 
     mock_warning.assert_called_once()

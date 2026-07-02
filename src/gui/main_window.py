@@ -369,7 +369,9 @@ class MainWindow(QtWidgets.QMainWindow):
         # Estado inicial do botão "Simulação" segue o config (serial.simulate).
         self.header.set_simulation_enabled(app_config.serial.simulate)
 
-        self.registration_view = RegistrationView(self._operator_repo, self._board_repo)
+        self.registration_view = RegistrationView(
+            self._operator_repo, self._board_repo, app_config.security.operator_delete_password
+        )
         self.parameters_view = TestParametersView(
             self._config_repo, asdict(app_config.test_defaults), ranges=app_config.instrument.ranges
         )

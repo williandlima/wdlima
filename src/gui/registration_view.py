@@ -86,8 +86,9 @@ class RegistrationView(QtWidgets.QWidget):
         operator_row_layout.addWidget(self.operator_combo, stretch=1)
         self.delete_operator_button = QtWidgets.QPushButton("Excluir")
         self.delete_operator_button.setToolTip(
-            "Remove este operador do histórico -- só funciona se ele nunca "
-            "tiver sido usado em um ensaio registrado."
+            "Remove este operador do histórico. Se ele já tiver ensaios "
+            "registrados, todos eles (e os dados vinculados) são apagados "
+            "junto -- ação sem volta."
         )
         self.delete_operator_button.clicked.connect(self._on_delete_operator)
         operator_row_layout.addWidget(self.delete_operator_button)
@@ -154,14 +155,18 @@ class RegistrationView(QtWidgets.QWidget):
     def _on_delete_operator(self) -> None:
         """Remove um cadastro duplicado/errado -- ver "duvida" do usuário
         sobre limpar operadores/testes carregados: não existia forma de
-        fazer isso pela GUI, só editando o banco direto. Bloqueado pelo
-        próprio banco (RecordInUseError) se o operador já tiver ensaios
-        registrados -- nunca apaga histórico de teste de verdade.
+        fazer isso pela GUI, só editando o banco direto.
+
+        Decisão explícita do usuário: excluir o operador excluiu TAMBÉM os
+        ensaios que ele rodou (e tudo vinculado a eles), em vez de bloquear
+        a exclusão -- "o operador e o seu ensaio serão excluídos, não
+        bloqueie a exclusão por causa do ensaio gravado". Por isso, se
+        houver ensaios vinculados, avisa a quantidade e pede confirmação
+        explícita ANTES da senha, deixando claro que não tem volta.
 
         Pede a senha do laboratório (config `security.operator_delete_password`)
         antes de excluir -- trava simples contra clique acidental, não
-        autenticação de verdade; a proteção real contra perda de dados já é
-        o bloqueio de FK do banco."""
+        autenticação de verdade."""
         operator = self._selected_operator()
         if operator is None:
             QtWidgets.QMessageBox.warning(
@@ -176,6 +181,24 @@ class RegistrationView(QtWidgets.QWidget):
         identity = operator.name
         if operator.if_number:
             identity = f"{operator.name} (IF: {operator.if_number})"
+
+        session_count = self._operator_repo.count_test_sessions(operator.id)
+        if session_count > 0:
+            plural = "s" if session_count != 1 else ""
+            answer = QtWidgets.QMessageBox.question(
+                self,
+                "Excluir ensaios vinculados?",
+                f'O operador "{identity}" tem {session_count} ensaio{plural} '
+                "registrado(s). Excluir este operador vai apagar TODOS esses "
+                "ensaios e os dados vinculados (amostras monitoradas, "
+                "avaliações, log de eventos). Esta ação não pode ser desfeita."
+                "\n\nDeseja continuar?",
+                QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No,
+                QtWidgets.QMessageBox.StandardButton.No,
+            )
+            if answer != QtWidgets.QMessageBox.StandardButton.Yes:
+                return
+
         password, confirmed = QtWidgets.QInputDialog.getText(
             self,
             "Senha necessária",

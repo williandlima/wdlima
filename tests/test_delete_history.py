@@ -141,8 +141,13 @@ def test_delete_operator_cancelled_password_prompt_is_not_deleted(qtbot, tmp_pat
     db.close()
 
 
-def test_delete_operator_blocked_when_used_by_a_test_session(qtbot, tmp_path: Path) -> None:
-    db = Database(tmp_path / "del_operator_blocked.db")
+def test_delete_operator_with_test_session_warns_count_then_cascades(
+    qtbot, tmp_path: Path
+) -> None:
+    """Decisão explícita do usuário: excluir o operador excluiu também o
+    ensaio vinculado, em vez de bloquear -- mas antes avisa a quantidade de
+    ensaios afetados e exige confirmação explícita (Yes/No)."""
+    db = Database(tmp_path / "del_operator_cascade.db")
     db.connect()
     operator_repo = OperatorRepository(db)
     board_repo = BoardRepository(db)
@@ -159,11 +164,47 @@ def test_delete_operator_blocked_when_used_by_a_test_session(qtbot, tmp_path: Pa
     qtbot.addWidget(view)
     view.operator_combo.setCurrentIndex(0)
 
-    with _enter_password(_PASSWORD), patch.object(QtWidgets.QMessageBox, "warning") as mock_warning:
+    with _confirm_yes() as mock_question, _enter_password(_PASSWORD):
         view.delete_operator_button.click()
 
-    mock_warning.assert_called_once()
+    mock_question.assert_called_once()
+    warning_text = mock_question.call_args.args[2]
+    assert "1" in warning_text  # avisa a quantidade de ensaios afetados
+    assert view.operator_combo.count() == 0  # operador e ensaio foram excluídos
+    assert operator_repo.list_all() == []
+    db.close()
+
+
+def test_delete_operator_with_test_session_cancelled_confirmation_is_not_deleted(
+    qtbot, tmp_path: Path
+) -> None:
+    """Responder "Não" ao aviso de quantidade cancela a exclusão antes
+    mesmo de pedir a senha."""
+    db = Database(tmp_path / "del_operator_cascade_no.db")
+    db.connect()
+    operator_repo = OperatorRepository(db)
+    board_repo = BoardRepository(db)
+    operator = operator_repo.get_or_create("Com ensaio")
+    board = board_repo.get_or_create("PCB-1", "PN-1", "A")
+    TestSessionRepository(db).create(
+        TestSession(
+            id=None, board_id=board.id, serial_number="SN-1", operator_id=operator.id,
+            test_parameter_config_id=None, config_snapshot_json="{}", production_order=None,
+            observations=None, status=TestSessionStatus.COMPLETED,
+        )
+    )
+    view = RegistrationView(operator_repo, board_repo, _PASSWORD)
+    qtbot.addWidget(view)
+    view.operator_combo.setCurrentIndex(0)
+
+    with patch.object(
+        QtWidgets.QMessageBox, "question",
+        return_value=QtWidgets.QMessageBox.StandardButton.No,
+    ):
+        view.delete_operator_button.click()
+
     assert view.operator_combo.count() == 1  # não foi removido
+    assert operator_repo.list_all() != []
     db.close()
 
 

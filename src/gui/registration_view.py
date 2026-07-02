@@ -57,6 +57,19 @@ class RegistrationView(QtWidgets.QWidget):
         self.operator_combo = QtWidgets.QComboBox()
         self.operator_combo.setEditable(True)
         self.operator_combo.setInsertPolicy(QtWidgets.QComboBox.InsertPolicy.NoInsert)
+        # Qt liga um QCompleter em modo InlineCompletion por padrão em combos
+        # editáveis: ele completa o texto digitado SILENCIOSAMENTE com o
+        # candidato mais próximo (ex.: digitar "Willian" quando também existe
+        # "Willian - 0132" no histórico pode preencher o campo com o nome
+        # errado, com o trecho extra só destacado/selecionado -- fácil de não
+        # perceber). Isso é especialmente perigoso pra "Excluir": o operador
+        # acha que está prestes a apagar "Willian" mas na verdade seria
+        # "Willian - 0132" (ou vice-versa). PopupCompletion mostra uma lista
+        # em vez de alterar o campo sozinho -- só muda o texto se o operador
+        # clicar numa sugestão explicitamente.
+        completer = self.operator_combo.completer()
+        if completer is not None:
+            completer.setCompletionMode(QtWidgets.QCompleter.CompletionMode.PopupCompletion)
         self.operator_combo.currentTextChanged.connect(self._on_operator_changed)
         # Campo confortável para digitar o nome (era estreito demais).
         self.operator_combo.setMinimumWidth(360)
@@ -156,10 +169,17 @@ class RegistrationView(QtWidgets.QWidget):
                 "Escolha um operador já cadastrado no campo acima para excluir.",
             )
             return
+        # Mostra nome + IF juntos (não só o nome) -- desambigua registros
+        # parecidos no histórico (ex.: "Willian" x "Willian - 0132" cadastrados
+        # em momentos diferentes), pra quem for excluir enxergar exatamente
+        # qual registro vai sumir antes de confirmar com a senha.
+        identity = operator.name
+        if operator.if_number:
+            identity = f"{operator.name} (IF: {operator.if_number})"
         password, confirmed = QtWidgets.QInputDialog.getText(
             self,
             "Senha necessária",
-            f'Digite a senha para excluir o operador "{operator.name}":',
+            f'Digite a senha para excluir o operador "{identity}":',
             QtWidgets.QLineEdit.EchoMode.Password,
         )
         if not confirmed:

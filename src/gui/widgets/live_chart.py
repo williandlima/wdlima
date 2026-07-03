@@ -169,6 +169,14 @@ class LiveChart(QtWidgets.QWidget):
         self._voltage_series.replace(voltage_points)
         self._current_series.replace(current_points)
 
+        # Expande o eixo X se o ensaio já durar mais do que a duração
+        # prevista em set_voltage_limits() (ex.: retries de leitura, tempo
+        # OFF mal contabilizado) -- sem isso a curva simplesmente "sai" do
+        # gráfico pela direita, com pontos fora da área visível.
+        elapsed_max = voltage_points[-1].x()
+        if elapsed_max > self._axis_x.max():
+            self._axis_x.setRange(0, elapsed_max * 1.05)
+
         # Expande o eixo Y se alguma leitura ultrapassar o range configurado.
         v_vals = [s.voltage for s in samples]
         lo, hi = min(v_vals), max(v_vals)

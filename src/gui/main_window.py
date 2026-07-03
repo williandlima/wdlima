@@ -32,6 +32,7 @@ from database.models import (
     EventLogEntry,
     MonitoredSample,
     Operator,
+    PowerStep,
     TestSession,
     TestSessionStatus,
 )
@@ -107,6 +108,23 @@ hardware conectado — útil para treinar ou testar parâmetros.</li>
 </ul>
 <p><i>Em caso de dúvida, consulte o responsável técnico do FCT.</i></p>
 """
+
+
+def _total_monitored_duration_s(steps: list[PowerStep]) -> float:
+    """Duração total exibida no eixo X do gráfico ao vivo (seção 3.3).
+
+    Soma `duration_s` de todos os passos MAIS `off_duration_s` de todos
+    menos o último -- espelha exatamente a regra de
+    `TestStateMachine._monitor()` (off_duration_s do ÚLTIMO passo nunca é
+    aplicado, o desligamento de saída ao fim do ensaio já cobre isso).
+    Sem incluir o tempo OFF aqui, o eixo X ficava curto demais sempre que
+    algum passo tinha tempo OFF configurado, e a curva "saía" do gráfico
+    pela direita assim que o tempo OFF passou a gerar amostras reais
+    (platô em zero) em vez de ser instantâneo.
+    """
+    return sum(step.duration_s for step in steps) + sum(
+        step.off_duration_s for step in steps[:-1]
+    )
 
 
 class TestRunWorker(QtCore.QThread):
@@ -507,11 +525,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._instrument.set_simulate(self.header.simulation_enabled())
 
         steps = run_config.steps()
-        # Em ciclos automáticos (power_sequence), a duração total exibida no
-        # gráfico é a soma de todos os passos — não só test_duration_s (que
-        # reflete apenas o passo único), senão o eixo X corta os ciclos
-        # seguintes mesmo com o cycle_label avançando corretamente.
-        total_duration_s = sum(step.duration_s for step in steps)
+        total_duration_s = _total_monitored_duration_s(steps)
         self.monitoring_panel.reset(
             run_config.voltage_min,
             run_config.voltage_max,

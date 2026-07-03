@@ -318,6 +318,31 @@ def test_off_duration_between_steps_turns_output_off_and_back_on() -> None:
     assert any("tempo off" in msg.lower() for _, msg in events)
 
 
+def test_off_period_zeroes_the_instrument_setpoint() -> None:
+    """Exigência explícita: a saída da fonte deve ficar OBRIGATORIAMENTE em
+    zero durante o tempo OFF -- não basta desligar a saída (OUTPut:STATe
+    OFF), o setpoint programado (tensão/corrente) também precisa ser
+    zerado, independente de como o instrumento resolve o OFF internamente.
+    Usa set_voltage()/set_current() (não apply()) para não disparar troca
+    de faixa desnecessária só por causa do zero."""
+    instrument = _make_mock_instrument()
+    buffer = _make_buffer([])
+    config = _make_config(
+        power_sequence=[
+            PowerStep(voltage=5.0, current=1.0, duration_s=0.02, off_duration_s=0.02),
+            PowerStep(voltage=8.0, current=1.0, duration_s=0.02, off_duration_s=0.0),
+        ],
+    )
+    sm = TestStateMachine(instrument, buffer, config)
+
+    result = sm.run()
+
+    assert result == TestState.COMPLETED
+    instrument.set_voltage.assert_any_call(0.0)
+    instrument.set_current.assert_any_call(0.0)
+    instrument.set_voltage_range.assert_not_called()  # zerar não deve trocar faixa
+
+
 def test_off_duration_is_never_applied_after_the_last_step() -> None:
     """off_duration_s no ÚLTIMO passo não deve gerar pausa extra -- o
     desligamento de saída ao fim do ensaio já cobre isso."""
@@ -410,6 +435,23 @@ def test_off_period_publishes_deterministic_zero_for_the_live_chart() -> None:
 def test_comm_error_turning_output_off_for_the_off_period_ends_the_test() -> None:
     instrument = _make_mock_instrument()
     instrument.output_off.side_effect = InstrumentCommunicationError("falha simulada")
+    buffer = _make_buffer([])
+    config = _make_config(
+        power_sequence=[
+            PowerStep(voltage=5.0, current=1.0, duration_s=0.02, off_duration_s=0.02),
+            PowerStep(voltage=8.0, current=1.0, duration_s=0.02, off_duration_s=0.0),
+        ],
+    )
+    sm = TestStateMachine(instrument, buffer, config)
+
+    result = sm.run()
+
+    assert result == TestState.COMM_ERROR
+
+
+def test_comm_error_zeroing_the_setpoint_for_the_off_period_ends_the_test() -> None:
+    instrument = _make_mock_instrument()
+    instrument.set_voltage.side_effect = InstrumentCommunicationError("falha simulada")
     buffer = _make_buffer([])
     config = _make_config(
         power_sequence=[

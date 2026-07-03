@@ -459,6 +459,19 @@ class TestStateMachine:
         except InstrumentCommunicationError as exc:
             self._on_event("ERROR", f"Falha ao desligar saída no tempo OFF: {exc}")
             return "comm_error"
+        try:
+            # Não basta desligar a saída (OUTPut:STATe OFF) -- o setpoint
+            # programado também é zerado explicitamente, para a saída da
+            # fonte ficar OBRIGATORIAMENTE em zero durante o tempo OFF, e
+            # não só "desconectada" (exigência do usuário). set_voltage()/
+            # set_current() (ao contrário de apply()) não fazem
+            # gerenciamento de faixa -- evita uma troca de faixa
+            # desnecessária de ida-e-volta só por causa do zero.
+            self._instrument.set_voltage(0.0)
+            self._instrument.set_current(0.0)
+        except InstrumentCommunicationError as exc:
+            self._on_event("ERROR", f"Falha ao zerar o setpoint no tempo OFF: {exc}")
+            return "comm_error"
 
         poll_interval = 1.0 / self._config.polling_rate_hz
         last_capture_monotonic: float | None = None

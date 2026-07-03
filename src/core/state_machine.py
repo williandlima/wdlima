@@ -433,11 +433,17 @@ class TestStateMachine:
     def _apply_off_period(self, step_index: int, off_duration_s: float) -> str | None:
         """Desliga a saída por `off_duration_s` antes do próximo passo.
 
-        Continua medindo e publicando amostras reais nesse intervalo (mesma
-        taxa de poll do monitoramento normal) -- sem isso, o gráfico ao vivo
-        ficava "congelado" no último valor do passo anterior durante todo o
-        tempo OFF, em vez de refletir a tensão real caindo para perto de
-        zero com a saída desligada.
+        Publica 0 V / 0 A durante toda a espera -- é o valor determinístico
+        e conhecido da saída desligada (comandada por este próprio método),
+        NÃO uma medição em tempo real via SCPI. Uma versão anterior lia
+        `measure_voltage()`/`measure_current()` de verdade nesse intervalo,
+        mas com a saída desligada a leitura pode não ser confiável (varia
+        por instrumento/firmware -- ex.: reflete descarga residual ou o
+        próprio setpoint programado em vez de ~0 V) e chegou a desenhar uma
+        falsa "rampa" no gráfico em vez do platô plano em zero esperado.
+        Ao religar, quem aplica o PRÓXIMO setpoint é o passo seguinte da
+        sequência (`_monitor`) -- este método nunca reprograma tensão/
+        corrente, só liga/desliga a saída.
 
         Retorna None se completou normalmente, ou "aborted"/"comm_error" se
         a espera foi interrompida — mesmo protocolo dos outros métodos desta
@@ -462,28 +468,13 @@ class TestStateMachine:
                 return "aborted"
 
             loop_start = time.monotonic()
-            try:
-                voltage = self._instrument.measure_voltage()
-                current = self._instrument.measure_current()
-            except InstrumentCommunicationError as exc:
-                # Saída já está desligada (estado seguro) -- uma falha de
-                # leitura aqui não justifica abortar o ensaio, só fica sem
-                # amostra neste instante.
-                self._on_event("WARNING", f"Falha ao medir durante o tempo OFF: {exc}")
-                self._instrument.reset_io_buffers()
-                time.sleep(min(poll_interval, max(0.0, deadline - time.monotonic())))
-                continue
-
-            sample = Sample(
-                timestamp=time.time(), step_index=step_index, voltage=voltage, current=current
-            )
+            sample = Sample(timestamp=time.time(), step_index=step_index, voltage=0.0, current=0.0)
             self._on_sample(sample)
             if self._should_capture(loop_start, step_index, last_capture_monotonic, step_index):
                 self._buffer.add_sample(sample)
                 last_capture_monotonic = loop_start
 
-            elapsed = time.monotonic() - loop_start
-            time.sleep(max(0.0, min(poll_interval - elapsed, deadline - time.monotonic())))
+            time.sleep(min(poll_interval, max(0.0, deadline - time.monotonic())))
 
         try:
             self._instrument.output_on()

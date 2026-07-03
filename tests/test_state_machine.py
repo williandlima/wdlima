@@ -366,6 +366,70 @@ def test_abort_during_off_period_does_not_turn_output_back_on() -> None:
     assert instrument.output_on.call_count == 1  # só o output_on() inicial de _apply_voltage
 
 
+def test_off_period_publishes_real_measurements_for_the_live_chart() -> None:
+    """Bug relatado: o gráfico ficava "congelado" no último valor do passo
+    anterior durante o tempo OFF, em vez de cair para a tensão real medida
+    (saída desligada -- esperado perto de zero) -- porque a espera não lia
+    nem publicava nenhuma amostra nesse intervalo. Agora o instrumento
+    continua sendo medido na mesma taxa de poll durante o tempo OFF."""
+    instrument = _make_mock_instrument()
+    instrument.measure_voltage.return_value = 0.0
+    instrument.measure_current.return_value = 0.0
+    buffer = _make_buffer([])
+    displayed: list = []
+    config = _make_config(
+        power_sequence=[
+            PowerStep(voltage=5.0, current=1.0, duration_s=0.02, off_duration_s=0.15),
+            PowerStep(voltage=8.0, current=1.0, duration_s=0.02, off_duration_s=0.0),
+        ],
+        polling_rate_hz=50.0,
+        capture_interval_s=0.0,
+    )
+    sm = TestStateMachine(instrument, buffer, config, on_sample=lambda s: displayed.append(s))
+
+    result = sm.run()
+
+    assert result == TestState.COMPLETED
+    # ~0.15s de tempo OFF a 50Hz deveria gerar várias leituras reais, não zero.
+    assert instrument.measure_voltage.call_count >= 5
+    assert all(s.voltage == 0.0 for s in displayed)  # saída desligada -> tensão real cai a 0
+
+
+def test_off_period_measurement_failure_logs_warning_and_does_not_abort() -> None:
+    """Falha de leitura durante o tempo OFF não pode abortar o ensaio -- a
+    saída já está desligada (estado seguro); só fica sem amostra naquele
+    instante e o ensaio segue normalmente."""
+    instrument = _make_mock_instrument()
+    off_period_started = {"flag": False}
+
+    def flaky_measure_voltage() -> float:
+        if off_period_started["flag"]:
+            raise InstrumentCommunicationError("falha de leitura simulada")
+        return 12.0
+
+    instrument.measure_voltage.side_effect = flaky_measure_voltage
+    buffer = _make_buffer([])
+    events: list[tuple[str, str]] = []
+
+    def on_event(level: str, msg: str) -> None:
+        events.append((level, msg))
+        if "tempo off" in msg.lower():
+            off_period_started["flag"] = True
+
+    config = _make_config(
+        power_sequence=[
+            PowerStep(voltage=5.0, current=1.0, duration_s=0.02, off_duration_s=0.05),
+            PowerStep(voltage=8.0, current=1.0, duration_s=0.02, off_duration_s=0.0),
+        ],
+    )
+    sm = TestStateMachine(instrument, buffer, config, on_event=on_event)
+
+    result = sm.run()
+
+    assert result == TestState.COMPLETED
+    assert any(level == "WARNING" and "tempo off" in msg.lower() for level, msg in events)
+
+
 def test_comm_error_turning_output_off_for_the_off_period_ends_the_test() -> None:
     instrument = _make_mock_instrument()
     instrument.output_off.side_effect = InstrumentCommunicationError("falha simulada")

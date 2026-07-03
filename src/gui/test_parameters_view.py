@@ -28,6 +28,7 @@ from gui.widgets.range_feedback import (
 class TestParametersView(QtWidgets.QWidget):
     parameters_submitted = QtCore.Signal(dict)
     back_requested = QtCore.Signal()
+    config_saved = QtCore.Signal(str)
 
     _COLUMN_LABELS = ("Tensão (V)", "Corrente máx. (A)", "Duração (s)", "Tempo OFF (s)")
 
@@ -194,10 +195,21 @@ class TestParametersView(QtWidgets.QWidget):
         actions_row = QtWidgets.QHBoxLayout()
         self.back_button = QtWidgets.QPushButton("Voltar")
         self.back_button.clicked.connect(self.back_requested.emit)
+        # Salva sem iniciar o ensaio -- o operador pode montar a configuração
+        # (passo único ou ciclo) e deixá-la pronta no histórico da placa para
+        # continuar depois, sem precisar preencher tudo de novo nem disparar
+        # o ensaio agora (ver histórico "Configurações salvas para esta placa").
+        self.save_only_button = QtWidgets.QPushButton("Salvar configuração")
+        self.save_only_button.setToolTip(
+            "Grava esta configuração no histórico da placa sem iniciar o ensaio -- "
+            "fica pronta em \"Configurações salvas para esta placa\" para continuar depois."
+        )
+        self.save_only_button.clicked.connect(self._on_save_only)
         self.submit_button = QtWidgets.QPushButton("Salvar e continuar")
         self.submit_button.clicked.connect(self._on_submit)
         actions_row.addWidget(self.back_button)
         actions_row.addStretch()
+        actions_row.addWidget(self.save_only_button)
         actions_row.addWidget(self.submit_button)
         form_layout.addLayout(actions_row)
         form_layout.addStretch()
@@ -255,6 +267,15 @@ class TestParametersView(QtWidgets.QWidget):
         # repopula a tabela explicitamente quando o operador pedir.
         self.sequence_table.setRowCount(0)
         self.refresh_history()
+        if self.history_combo.count() > 0:
+            # `list_for_board` ordena por created_at DESC -- índice 0 é a
+            # config mais recente. Autocarregar ao entrar na tela é o que
+            # faz o operador "não precisar preencher tudo de novo" quando
+            # volta para uma placa que já tem configuração salva (ex.: ele
+            # salvou e saiu antes de rodar o ensaio, ou está testando outra
+            # unidade da mesma placa em seguida).
+            self.history_combo.setCurrentIndex(0)
+            self._on_load_history()
 
     def refresh_history(self) -> None:
         self.history_combo.clear()
@@ -425,25 +446,32 @@ class TestParametersView(QtWidgets.QWidget):
             )
         return steps
 
-    def _on_submit(self) -> None:
+    def _validate_and_save(self) -> TestParameterConfig | None:
+        """Valida o formulário e grava a configuração (upsert por board_id+name).
+
+        Comum a "Salvar configuração" (fica só no histórico) e "Salvar e
+        continuar" (histórico + inicia o ensaio) -- as duas ações precisam
+        exatamente da mesma validação e persistência, só divergem no que
+        acontece depois de salvar.
+        """
         if self._board is None:
             QtWidgets.QMessageBox.warning(self, "Placa não definida", "Cadastre a placa antes de definir os parâmetros.")
-            return
+            return None
 
         config_name = self.config_name_edit.text().strip()
         if not config_name:
             QtWidgets.QMessageBox.warning(self, "Campo obrigatório", "Informe um nome para a configuração.")
-            return
+            return None
 
         if self.voltage_min_spin.value() > self.voltage_max_spin.value():
             QtWidgets.QMessageBox.warning(
                 self, "Limites inválidos", "Tensão mínima não pode ser maior que a tensão máxima."
             )
-            return
+            return None
 
         power_sequence = self._read_power_sequence()
         if power_sequence is None:
-            return
+            return None
 
         range_mode = self.range_combo.currentData()
         # Bloqueia ANTES de gravar/aplicar -- descobrir só com o -222 do
@@ -471,7 +499,7 @@ class TestParametersView(QtWidgets.QWidget):
                 QtWidgets.QMessageBox.warning(
                     self, "Faixa V/A inválida", f"{where}: {result.message}"
                 )
-                return
+                return None
 
         config = TestParameterConfig(
             id=None,
@@ -487,6 +515,21 @@ class TestParametersView(QtWidgets.QWidget):
         )
         saved_config = self._config_repo.save(config)
         self.refresh_history()
+        return saved_config
+
+    def _on_save_only(self) -> None:
+        """"Salvar configuração": grava e permanece na tela, sem iniciar o
+        ensaio -- o operador monta os parâmetros agora e roda o teste depois,
+        sem preencher tudo de novo (a configuração já está no histórico)."""
+        saved_config = self._validate_and_save()
+        if saved_config is None:
+            return
+        self.config_saved.emit(saved_config.name)
+
+    def _on_submit(self) -> None:
+        saved_config = self._validate_and_save()
+        if saved_config is None:
+            return
 
         run_config = TestRunConfig(
             nominal_voltage=saved_config.nominal_voltage,

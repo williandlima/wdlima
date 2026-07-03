@@ -12,7 +12,7 @@ import itertools
 import pytest
 
 from config import VoltageRange
-from gui.widgets.range_feedback import RangeFitState, evaluate_range_fit
+from gui.widgets.range_feedback import RangeFitState, evaluate_range_fit, evaluate_test_limit_fit
 from hardware.power_supply import PowerSupplyE363x
 
 _LOW = VoltageRange(name="LOW", max_voltage=25.0, max_current=7.0)
@@ -72,6 +72,46 @@ def test_forced_range_name_that_does_not_exist_reports_the_config_typo() -> None
     assert result.state is RangeFitState.OUT_OF_ALL_RANGES
     assert "MEDIUM" in result.message
     assert "não existe" in result.message
+
+
+# -- evaluate_test_limit_fit: passo do ciclo x parâmetros do ensaio ----------
+
+
+def test_step_within_test_parameters_is_ok() -> None:
+    result = evaluate_test_limit_fit(5.0, 1.0, voltage_min=4.5, voltage_max=5.5, current_max=1.0)
+    assert result.state is RangeFitState.OK
+    assert result.message == ""
+
+
+def test_step_voltage_above_test_maximum_warns_upper_limit() -> None:
+    result = evaluate_test_limit_fit(8.0, 1.0, voltage_min=4.5, voltage_max=5.5, current_max=1.0)
+    assert result.state is RangeFitState.OUT_OF_ALL_RANGES
+    assert "8.00" in result.message
+    assert "limite superior" in result.message
+    assert "5.50" in result.message
+
+
+def test_step_voltage_below_test_minimum_warns_lower_limit() -> None:
+    result = evaluate_test_limit_fit(1.0, 1.0, voltage_min=4.5, voltage_max=5.5, current_max=1.0)
+    assert result.state is RangeFitState.OUT_OF_ALL_RANGES
+    assert "abaixo do limite inferior" in result.message
+    assert "4.50" in result.message
+
+
+def test_step_current_above_test_maximum_warns_upper_limit() -> None:
+    result = evaluate_test_limit_fit(5.0, 2.0, voltage_min=4.5, voltage_max=5.5, current_max=1.0)
+    assert result.state is RangeFitState.OUT_OF_ALL_RANGES
+    assert "2.000" in result.message
+    assert "limite superior" in result.message
+    assert "1.000" in result.message
+
+
+def test_step_exactly_at_the_boundary_is_ok() -> None:
+    """Limites são inclusivos -- um passo igual ao mínimo/máximo declarado
+    não é "extrapolar", é usar o próprio limite configurado."""
+    assert evaluate_test_limit_fit(5.5, 1.0, voltage_min=4.5, voltage_max=5.5, current_max=1.0).state is RangeFitState.OK
+    assert evaluate_test_limit_fit(4.5, 1.0, voltage_min=4.5, voltage_max=5.5, current_max=1.0).state is RangeFitState.OK
+    assert evaluate_test_limit_fit(5.0, 1.0, voltage_min=4.5, voltage_max=5.5, current_max=1.0).state is RangeFitState.OK
 
 
 # -- Guarda de regressão: GUI e driver NUNCA podem divergir -------------------

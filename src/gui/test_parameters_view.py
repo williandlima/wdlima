@@ -21,6 +21,7 @@ from gui.widgets.range_feedback import (
     build_range_combo,
     build_range_warning_label,
     evaluate_range_fit,
+    evaluate_test_limit_fit,
 )
 
 
@@ -124,6 +125,12 @@ class TestParametersView(QtWidgets.QWidget):
         self.current_max_spin.valueChanged.connect(self._update_single_step_range_feedback)
         self.range_combo.currentIndexChanged.connect(self._update_single_step_range_feedback)
         self.range_combo.currentIndexChanged.connect(self._update_all_row_range_feedback)
+        # Cada passo do ciclo é amarrado a estes 3 campos -- mudar qualquer um
+        # precisa reavaliar as linhas já digitadas na sequência, senão a cor
+        # da célula fica desatualizada em relação ao limite atual.
+        self.voltage_min_spin.valueChanged.connect(self._update_all_row_range_feedback)
+        self.voltage_max_spin.valueChanged.connect(self._update_all_row_range_feedback)
+        self.current_max_spin.valueChanged.connect(self._update_all_row_range_feedback)
 
         advanced_group = QtWidgets.QGroupBox("Parâmetros avançados de monitoramento")
         advanced_form = QtWidgets.QFormLayout(advanced_group)
@@ -362,6 +369,17 @@ class TestParametersView(QtWidgets.QWidget):
         except ValueError:
             return  # célula em edição/inválida -- validado de verdade em _read_power_sequence
         result = evaluate_range_fit(voltage, current, self._ranges, self.range_combo.currentData())
+        if result.state is RangeFitState.OK:
+            # Faixa de hardware OK -- ainda falta conferir se o passo respeita
+            # os limites que o operador definiu para ESTE ensaio (não é só
+            # "a fonte aceita", é "está dentro do que foi documentado").
+            result = evaluate_test_limit_fit(
+                voltage,
+                current,
+                self.voltage_min_spin.value(),
+                self.voltage_max_spin.value(),
+                self.current_max_spin.value(),
+            )
         # setBackground()/setToolTip() disparam itemChanged de novo -- sem
         # bloquear, cada edição de célula reentraria aqui indefinidamente.
         with QtCore.QSignalBlocker(self.sequence_table):
@@ -436,6 +454,18 @@ class TestParametersView(QtWidgets.QWidget):
         ]
         for index, step in enumerate(effective_steps, start=1):
             result = evaluate_range_fit(step.voltage, step.current, self._ranges, range_mode)
+            if result.state is RangeFitState.OK and power_sequence:
+                # Só se aplica a ciclos (sequência multi-step) -- o passo
+                # único usa Tensão mínima/máxima como referência visual do
+                # gráfico, não como limite de configuração (ver docstring
+                # do módulo e do LiveChart).
+                result = evaluate_test_limit_fit(
+                    step.voltage,
+                    step.current,
+                    self.voltage_min_spin.value(),
+                    self.voltage_max_spin.value(),
+                    self.current_max_spin.value(),
+                )
             if result.state is not RangeFitState.OK:
                 where = f"Passo {index} da sequência" if power_sequence else "Tensão nominal/Corrente máxima"
                 QtWidgets.QMessageBox.warning(

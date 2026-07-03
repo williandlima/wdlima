@@ -68,6 +68,9 @@ def test_negative_time_off_blocks_submit(qtbot, app_config, tmp_path: Path) -> N
 def test_time_off_survives_save_and_reload_roundtrip(qtbot, app_config, tmp_path: Path) -> None:
     view, db = _view(qtbot, tmp_path, app_config)
     view.config_name_edit.setText("Ciclo térmico")
+    view.voltage_min_spin.setValue(4.5)
+    view.voltage_max_spin.setValue(5.5)
+    view.current_max_spin.setValue(1.0)
     view.add_step_button.click()
     view.sequence_table.item(0, 0).setText("5.0")
     view.sequence_table.item(0, 1).setText("1.0")

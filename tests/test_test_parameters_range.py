@@ -98,6 +98,8 @@ def test_forcing_low_range_colors_sequence_row_that_only_fits_high(qtbot, app_co
 def test_sequence_row_out_of_range_blocks_submit(qtbot, app_config, tmp_path: Path) -> None:
     view, db = _view(qtbot, tmp_path, app_config)
     view.config_name_edit.setText("Sequência inválida")
+    view.voltage_min_spin.setValue(4.5)
+    view.voltage_max_spin.setValue(5.5)  # 5V do passo 1 cabe dentro dos parâmetros do ensaio
     view.nominal_voltage_spin.setValue(5.0)
     view.current_max_spin.setValue(1.0)
     view.add_step_button.click()  # passo 1: válido (5V/1A)
@@ -110,6 +112,68 @@ def test_sequence_row_out_of_range_blocks_submit(qtbot, app_config, tmp_path: Pa
             view.submit_button.click()
     mock_warning.assert_called_once()
     assert "Passo 2" in mock_warning.call_args.args[2]
+    db.close()
+
+
+def test_sequence_step_above_test_voltage_maximum_warns_and_blocks(qtbot, app_config, tmp_path: Path) -> None:
+    """Passo do CICLO com tensão que cabe na fonte, mas ultrapassa a Tensão
+    máxima definida nos parâmetros do próprio ensaio -- precisa avisar e
+    bloquear mesmo sem nenhum problema de faixa de hardware."""
+    view, db = _view(qtbot, tmp_path, app_config)
+    view.config_name_edit.setText("Passo além dos parâmetros")
+    view.voltage_min_spin.setValue(4.5)
+    view.voltage_max_spin.setValue(5.5)
+    view.current_max_spin.setValue(1.0)
+    view.nominal_voltage_spin.setValue(8.0)  # cabe em LOW/HIGH, mas > 5.5V do ensaio
+    view.add_step_button.click()
+
+    voltage_item = view.sequence_table.item(0, 0)
+    assert "limite superior" in voltage_item.toolTip()
+    assert "5.50" in voltage_item.toolTip()
+
+    with patch.object(QtWidgets.QMessageBox, "warning") as mock_warning:
+        with qtbot.assertNotEmitted(view.parameters_submitted, wait=200):
+            view.submit_button.click()
+    mock_warning.assert_called_once()
+    message = mock_warning.call_args.args[2]
+    assert "Passo 1" in message
+    assert "limite superior" in message
+    db.close()
+
+
+def test_sequence_step_above_test_current_maximum_warns_and_blocks(qtbot, app_config, tmp_path: Path) -> None:
+    view, db = _view(qtbot, tmp_path, app_config)
+    view.config_name_edit.setText("Corrente além dos parâmetros")
+    view.voltage_min_spin.setValue(4.5)
+    view.voltage_max_spin.setValue(5.5)
+    view.nominal_voltage_spin.setValue(5.0)
+    view.current_max_spin.setValue(1.0)
+    view.add_step_button.click()  # passo 1: dentro dos limites (5V/1A)
+
+    view.sequence_table.item(0, 1).setText("3.0")  # excede a Corrente máxima (1A) do ensaio
+
+    with patch.object(QtWidgets.QMessageBox, "warning") as mock_warning:
+        with qtbot.assertNotEmitted(view.parameters_submitted, wait=200):
+            view.submit_button.click()
+    mock_warning.assert_called_once()
+    message = mock_warning.call_args.args[2]
+    assert "limite superior" in message
+    assert "Corrente máxima" in message
+    db.close()
+
+
+def test_single_step_mode_ignores_test_voltage_limits(qtbot, app_config, tmp_path: Path) -> None:
+    """Sem sequência (passo único), Tensão mínima/máxima continuam sendo só
+    referência visual do gráfico -- essa checagem nova só vale para ciclos."""
+    view, db = _view(qtbot, tmp_path, app_config)
+    view.config_name_edit.setText("Passo único fora da referência")
+    view.voltage_min_spin.setValue(4.5)
+    view.voltage_max_spin.setValue(5.5)
+    view.current_max_spin.setValue(1.0)
+    view.nominal_voltage_spin.setValue(8.0)  # fora da referência, mas cabe na fonte
+
+    with qtbot.waitSignal(view.parameters_submitted, timeout=1000):
+        view.submit_button.click()
     db.close()
 
 

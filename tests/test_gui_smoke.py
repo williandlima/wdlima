@@ -420,6 +420,49 @@ def test_live_chart_axes_are_color_coded(qtbot) -> None:
     assert chart._axis_current.labelsColor().name().upper() == LiveChart._COLOR_CURRENT.upper()
 
 
+def test_total_monitored_duration_includes_off_duration_except_last_step() -> None:
+    """Bug relatado: o eixo X do gráfico era calculado só com duration_s dos
+    passos, sem contar off_duration_s -- assim que o tempo OFF passou a
+    gerar amostras reais (platô em zero, não mais instantâneo), o eixo
+    ficava curto e a curva "saía" do gráfico pela direita. off_duration_s
+    do ÚLTIMO passo fica de fora, espelhando TestStateMachine._monitor
+    (nunca aplica tempo OFF depois do último passo)."""
+    from database.models import PowerStep
+    from gui.main_window import _total_monitored_duration_s
+
+    steps = [
+        PowerStep(voltage=5.0, current=1.0, duration_s=60.0, off_duration_s=30.0),
+        PowerStep(voltage=8.0, current=1.0, duration_s=60.0, off_duration_s=999.0),  # último: ignorado
+    ]
+
+    assert _total_monitored_duration_s(steps) == 60.0 + 30.0 + 60.0
+
+
+def test_live_chart_expands_x_axis_when_elapsed_time_exceeds_configured_duration(
+    qtbot,
+) -> None:
+    """Rede de segurança: se o tempo real do ensaio ultrapassar a duração
+    prevista (por qualquer motivo -- cálculo desatualizado, retries), a
+    curva não pode simplesmente "sair" do gráfico pela direita."""
+    from core.sampling_buffer import Sample
+    from gui.widgets.live_chart import LiveChart
+
+    chart = LiveChart()
+    qtbot.addWidget(chart)
+    chart.set_voltage_limits(4.5, 5.5, duration_s=10.0, step_voltages=[5.0])
+    assert chart._axis_x.max() == pytest.approx(10.0)
+
+    chart.update_samples([Sample(timestamp=0.0, step_index=0, voltage=5.0, current=1.0)])
+    chart.update_samples(
+        [
+            Sample(timestamp=0.0, step_index=0, voltage=5.0, current=1.0),
+            Sample(timestamp=15.0, step_index=0, voltage=5.0, current=1.0),
+        ]
+    )
+
+    assert chart._axis_x.max() > 15.0  # expandiu além do tempo real da última amostra
+
+
 def test_show_toast_creates_non_blocking_widget(qtbot) -> None:
     from PySide6 import QtWidgets
 

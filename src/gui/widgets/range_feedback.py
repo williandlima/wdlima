@@ -89,6 +89,38 @@ def evaluate_range_fit(
     )
 
 
+def evaluate_test_limit_fit(
+    voltage: float, current: float, voltage_min: float, voltage_max: float, current_max: float
+) -> RangeFitResult:
+    """Confere um passo do ciclo (sequência multi-step) contra os limites que
+    o PRÓPRIO operador definiu em "Tensão mínima/máxima" e "Corrente máxima"
+    -- distinto de `evaluate_range_fit` (faixa de HARDWARE da fonte). Sem
+    isto, um passo digitado fora desses limites era aceito em silêncio; só
+    o passo único (referência do gráfico ao vivo, nunca gatilho automático)
+    tem essa liberdade -- um ciclo tem que respeitar o que foi documentado
+    como aceitável para a placa.
+    """
+    if voltage > voltage_max:
+        return RangeFitResult(
+            RangeFitState.OUT_OF_ALL_RANGES,
+            f"{voltage:.2f} V excede o limite superior definido nos parâmetros do "
+            f"ensaio (Tensão máxima: {voltage_max:.2f} V).",
+        )
+    if voltage < voltage_min:
+        return RangeFitResult(
+            RangeFitState.OUT_OF_ALL_RANGES,
+            f"{voltage:.2f} V está abaixo do limite inferior definido nos parâmetros "
+            f"do ensaio (Tensão mínima: {voltage_min:.2f} V).",
+        )
+    if current > current_max:
+        return RangeFitResult(
+            RangeFitState.OUT_OF_ALL_RANGES,
+            f"{current:.3f} A excede o limite superior definido nos parâmetros do "
+            f"ensaio (Corrente máxima: {current_max:.3f} A).",
+        )
+    return RangeFitResult(RangeFitState.OK, "")
+
+
 _SPIN_STYLE_BY_STATE = {
     RangeFitState.OK: "",
     RangeFitState.OUT_OF_FORCED_RANGE: f"border: 2px solid {_COLOR_WARNING};",

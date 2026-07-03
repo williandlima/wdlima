@@ -706,7 +706,13 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _on_evaluation_submitted(self, data: dict) -> None:
         session: TestSession = data["session"]
-        self._save_report(session.id)
+        # "save_report" já reflete a escolha Sim/Não do operador (EvaluationView
+        # pergunta isso ANTES de emitir o sinal) -- aqui só decide se abre o
+        # diálogo "onde salvar" ou pula a geração do relatório de vez.
+        if data.get("save_report", True):
+            self._save_report(session.id)
+        else:
+            show_toast(self, "Ensaio encerrado sem salvar relatório.", level="info", duration_ms=4000)
 
         self._session = None
         self._state_machine = None

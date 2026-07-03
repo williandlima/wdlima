@@ -26,11 +26,14 @@ from database.models import (
 
 
 class RecordInUseError(Exception):
-    """Excluir um registro referenciado por outro (ex.: operador ou config
-    de parâmetros com ensaios reais vinculados) -- `PRAGMA foreign_keys=ON`
-    (ver database.py) já impede a exclusão a nível de banco; aqui só se
-    traduz o `sqlite3.IntegrityError` bruto numa mensagem acionável, sem
-    vazar detalhe de SQL pra camada de GUI."""
+    """Excluir um registro referenciado por outro (ex.: config de parâmetros
+    com ensaios reais vinculados) -- `PRAGMA foreign_keys=ON` (ver database.py)
+    já impede a exclusão a nível de banco; aqui só se traduz o
+    `sqlite3.IntegrityError` bruto numa mensagem acionável, sem vazar
+    detalhe de SQL pra camada de GUI. OperatorRepository.delete() NÃO usa
+    mais este bloqueio de propósito (decisão do usuário) -- ele apaga o
+    operador e o histórico dele em cascata; a exceção fica só como fallback
+    defensivo para qualquer FK inesperada."""
 
 
 class OperatorRepository:
@@ -64,17 +67,38 @@ class OperatorRepository:
             raise LookupError(f"Operator {operator_id} não encontrado.")
         return self._to_model(row)
 
+    def count_test_sessions(self, operator_id: int) -> int:
+        """Quantos ensaios ficam vinculados a este operador (como quem rodou
+        o teste) -- usado pela GUI para avisar a quantidade antes de excluir,
+        já que `delete()` agora apaga tudo isso em cascata."""
+        row = self._db.connection.execute(
+            "SELECT COUNT(*) AS n FROM test_sessions WHERE operator_id = ?", (operator_id,)
+        ).fetchone()
+        return row["n"]
+
     def delete(self, operator_id: int) -> None:
-        """Remove o operador da lista/histórico -- ex.: cadastro duplicado
-        ou digitado errado. Bloqueado pelo próprio banco (RecordInUseError)
-        se o operador já tiver algum ensaio registrado: nunca apaga
-        histórico de teste de verdade, só entradas nunca usadas."""
+        """Remove o operador e TODO o histórico vinculado a ele: os ensaios
+        que ele rodou (e tudo que depende de cada um -- amostras monitoradas,
+        avaliação, log de eventos, via ON DELETE CASCADE) e as avaliações em
+        que ele foi o avaliador de um ensaio de outra pessoa. Decisão
+        explícita do usuário: "o operador e o seu ensaio serão excluídos,
+        não bloqueie a exclusão por causa do ensaio gravado" -- a GUI mostra
+        a quantidade de ensaios afetados (via count_test_sessions) antes de
+        chamar isto, e pede senha de confirmação. Não há mais volta atrás
+        depois de chamado."""
+        conn = self._db.connection
         try:
-            self._db.connection.execute("DELETE FROM operators WHERE id = ?", (operator_id,))
-            self._db.connection.commit()
+            # evaluations.operator_id (avaliador) não tem ON DELETE CASCADE
+            # e é uma referência independente de test_sessions.operator_id --
+            # precisa ser limpa à parte antes de apagar o operador.
+            conn.execute("DELETE FROM evaluations WHERE operator_id = ?", (operator_id,))
+            conn.execute("DELETE FROM test_sessions WHERE operator_id = ?", (operator_id,))
+            conn.execute("DELETE FROM operators WHERE id = ?", (operator_id,))
+            conn.commit()
         except sqlite3.IntegrityError as exc:
+            conn.rollback()
             raise RecordInUseError(
-                "Este operador tem ensaios registrados e não pode ser excluído."
+                "Não foi possível excluir este operador (registro ainda referenciado)."
             ) from exc
 
     @staticmethod

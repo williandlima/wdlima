@@ -56,14 +56,15 @@ def test_operator_delete_removes_an_unused_entry(db: Database) -> None:
     assert repo.list_all() == []
 
 
-def test_operator_delete_is_blocked_when_referenced_by_a_test_session(db: Database) -> None:
-    """PRAGMA foreign_keys=ON (database.py) já bloqueia a nível de banco --
-    o repository só traduz o IntegrityError bruto numa mensagem acionável.
-    Nunca pode apagar o operador de um ensaio que realmente aconteceu."""
+def test_operator_delete_cascades_to_test_session_and_dependents(db: Database) -> None:
+    """Decisão explícita do usuário: "o operador e o seu ensaio serão
+    excluídos, não bloqueie a exclusão por causa do ensaio gravado".
+    Apagar um operador com ensaio vinculado apaga o ensaio e tudo que
+    depende dele (amostras monitoradas, avaliação, log de eventos)."""
     operator_repo = OperatorRepository(db)
     operator = operator_repo.get_or_create("Com ensaio")
     board = BoardRepository(db).get_or_create("PCB-001", "PN-123", "RevA")
-    TestSessionRepository(db).create(
+    session = TestSessionRepository(db).create(
         TestSession(
             id=None,
             board_id=board.id,
@@ -76,11 +77,74 @@ def test_operator_delete_is_blocked_when_referenced_by_a_test_session(db: Databa
             status=TestSessionStatus.COMPLETED,
         )
     )
+    MonitoredSampleRepository(db).insert_batch(
+        [
+            MonitoredSample(
+                id=None, test_session_id=session.id, timestamp="2026-01-01T00:00:00",
+                step_index=0, voltage_measured=5.0, current_measured=1.0,
+            )
+        ]
+    )
+    EvaluationRepository(db).create(
+        Evaluation(
+            id=None, test_session_id=session.id, operator_id=operator.id,
+            result=EvaluationResult.APPROVED, comment=None,
+        )
+    )
+    EventLogRepository(db).add(
+        EventLogEntry(
+            id=None, test_session_id=session.id, timestamp="2026-01-01T00:00:00",
+            level="INFO", source="test", message="msg",
+        )
+    )
 
-    with pytest.raises(RecordInUseError):
-        operator_repo.delete(operator.id)
+    assert operator_repo.count_test_sessions(operator.id) == 1
 
-    assert operator_repo.get(operator.id) is not None  # não foi excluído
+    operator_repo.delete(operator.id)
+
+    with pytest.raises(LookupError):
+        operator_repo.get(operator.id)
+    with pytest.raises(LookupError):
+        TestSessionRepository(db).get(session.id)
+    assert MonitoredSampleRepository(db).list_for_session(session.id) == []
+    assert EvaluationRepository(db).get_for_session(session.id) is None
+    assert EventLogRepository(db).list_for_session(session.id) == []
+
+
+def test_operator_delete_cascades_evaluations_where_operator_was_only_the_evaluator(
+    db: Database,
+) -> None:
+    """evaluations.operator_id (quem avaliou) é uma referência independente
+    de test_sessions.operator_id (quem rodou o teste) -- pode ser uma
+    pessoa diferente. Apagar o operador precisa limpar essa referência
+    também, mesmo quando o ensaio em si pertence a outro operador."""
+    board = BoardRepository(db).get_or_create("PCB-001", "PN-123", "RevA")
+    runner = OperatorRepository(db).get_or_create("Quem rodou")
+    evaluator = OperatorRepository(db).get_or_create("Quem avaliou")
+    session = TestSessionRepository(db).create(
+        TestSession(
+            id=None,
+            board_id=board.id,
+            serial_number="SN-0002",
+            operator_id=runner.id,
+            test_parameter_config_id=None,
+            config_snapshot_json=json.dumps({}),
+            production_order=None,
+            observations=None,
+            status=TestSessionStatus.COMPLETED,
+        )
+    )
+    EvaluationRepository(db).create(
+        Evaluation(
+            id=None, test_session_id=session.id, operator_id=evaluator.id,
+            result=EvaluationResult.APPROVED, comment=None,
+        )
+    )
+
+    OperatorRepository(db).delete(evaluator.id)
+
+    assert TestSessionRepository(db).get(session.id) is not None  # ensaio do runner intacto
+    assert EvaluationRepository(db).get_for_session(session.id) is None  # avaliação some
 
 
 def test_board_get_or_create_distinguishes_revisions(db: Database) -> None:

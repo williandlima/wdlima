@@ -1,6 +1,6 @@
 [project]
 name = "fct-avibras"
-version = "0.3.3"
+version = "0.3.4"
 description = "Sistema de Teste Funcional (FCT) - Avibras Aeroco"
 requires-python = ">=3.10,<3.12"
 

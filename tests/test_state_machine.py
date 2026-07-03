@@ -366,15 +366,22 @@ def test_abort_during_off_period_does_not_turn_output_back_on() -> None:
     assert instrument.output_on.call_count == 1  # só o output_on() inicial de _apply_voltage
 
 
-def test_off_period_publishes_real_measurements_for_the_live_chart() -> None:
-    """Bug relatado: o gráfico ficava "congelado" no último valor do passo
-    anterior durante o tempo OFF, em vez de cair para a tensão real medida
-    (saída desligada -- esperado perto de zero) -- porque a espera não lia
-    nem publicava nenhuma amostra nesse intervalo. Agora o instrumento
-    continua sendo medido na mesma taxa de poll durante o tempo OFF."""
+def test_off_period_publishes_deterministic_zero_for_the_live_chart() -> None:
+    """Bug relatado (2 rodadas): (1) o gráfico ficava "congelado" no último
+    valor do passo anterior durante o tempo OFF, em vez de cair para zero,
+    porque a espera não publicava nenhuma amostra nesse intervalo; (2) uma
+    correção anterior passou a MEDIR de verdade via SCPI nesse intervalo,
+    mas em campo isso produziu uma "rampa" falsa em vez do platô plano em
+    zero -- a leitura com a saída desligada não é confiável em todo
+    instrumento/firmware. A versão atual publica 0 V / 0 A determinístico
+    (não medido) durante toda a espera -- é o valor que sabemos ser
+    verdadeiro, já que este método é quem manda desligar a saída."""
     instrument = _make_mock_instrument()
-    instrument.measure_voltage.return_value = 0.0
-    instrument.measure_current.return_value = 0.0
+    # Casa com o 1º passo para a estabilização inicial resolver numa única
+    # leitura -- isola a contagem de chamadas ao que interessa aqui: nenhuma
+    # chamada extra deveria vir do tempo OFF em si.
+    instrument.measure_voltage.return_value = 5.0
+    instrument.measure_current.return_value = 1.0
     buffer = _make_buffer([])
     displayed: list = []
     config = _make_config(
@@ -390,44 +397,14 @@ def test_off_period_publishes_real_measurements_for_the_live_chart() -> None:
     result = sm.run()
 
     assert result == TestState.COMPLETED
-    # ~0.15s de tempo OFF a 50Hz deveria gerar várias leituras reais, não zero.
-    assert instrument.measure_voltage.call_count >= 5
-    assert all(s.voltage == 0.0 for s in displayed)  # saída desligada -> tensão real cai a 0
-
-
-def test_off_period_measurement_failure_logs_warning_and_does_not_abort() -> None:
-    """Falha de leitura durante o tempo OFF não pode abortar o ensaio -- a
-    saída já está desligada (estado seguro); só fica sem amostra naquele
-    instante e o ensaio segue normalmente."""
-    instrument = _make_mock_instrument()
-    off_period_started = {"flag": False}
-
-    def flaky_measure_voltage() -> float:
-        if off_period_started["flag"]:
-            raise InstrumentCommunicationError("falha de leitura simulada")
-        return 12.0
-
-    instrument.measure_voltage.side_effect = flaky_measure_voltage
-    buffer = _make_buffer([])
-    events: list[tuple[str, str]] = []
-
-    def on_event(level: str, msg: str) -> None:
-        events.append((level, msg))
-        if "tempo off" in msg.lower():
-            off_period_started["flag"] = True
-
-    config = _make_config(
-        power_sequence=[
-            PowerStep(voltage=5.0, current=1.0, duration_s=0.02, off_duration_s=0.05),
-            PowerStep(voltage=8.0, current=1.0, duration_s=0.02, off_duration_s=0.0),
-        ],
-    )
-    sm = TestStateMachine(instrument, buffer, config, on_event=on_event)
-
-    result = sm.run()
-
-    assert result == TestState.COMPLETED
-    assert any(level == "WARNING" and "tempo off" in msg.lower() for level, msg in events)
+    off_samples = [s for s in displayed if s.voltage == 0.0 and s.current == 0.0]
+    # ~0.15s de tempo OFF a 50Hz deveria gerar várias amostras em zero.
+    assert len(off_samples) >= 5
+    # Estabilização (1) + monitoramento do passo 1 (1) + monitoramento do
+    # passo 2 (1) = no máximo ~3 leituras reais -- o tempo OFF em si não faz
+    # nenhuma (sem isso, o total explodiria para dezenas de chamadas).
+    assert instrument.measure_voltage.call_count <= 4
+    assert instrument.measure_current.call_count <= 4
 
 
 def test_comm_error_turning_output_off_for_the_off_period_ends_the_test() -> None:

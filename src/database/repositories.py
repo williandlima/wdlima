@@ -423,9 +423,15 @@ class EventLogRepository:
 
     def add(self, entry: EventLogEntry) -> None:
         conn = self._db.connection
+        # Mesmo motivo do EvaluationRepository.create(): grava hora LOCAL
+        # explicitamente -- o DEFAULT (datetime('now')) do schema é UTC, o
+        # que deixava o "Timestamp" do log de eventos do relatório com o
+        # horário errado em relação ao horário real do ensaio.
+        timestamp = entry.timestamp or dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         conn.execute(
-            "INSERT INTO event_log (test_session_id, level, source, message) VALUES (?, ?, ?, ?)",
-            (entry.test_session_id, entry.level, entry.source, entry.message),
+            "INSERT INTO event_log (test_session_id, timestamp, level, source, message) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (entry.test_session_id, timestamp, entry.level, entry.source, entry.message),
         )
         conn.commit()
 

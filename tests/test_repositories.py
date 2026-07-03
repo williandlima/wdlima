@@ -428,3 +428,31 @@ def test_event_log_records_failures_tied_to_session(db: Database) -> None:
     entries = repo.list_for_session(session.id)
     assert len(entries) == 1
     assert entries[0].message == "Falha de comunicação"
+
+
+def test_event_log_timestamp_uses_local_wall_clock_time_when_not_given(db: Database) -> None:
+    """Mesmo bug do evaluated_at: o DEFAULT (datetime('now')) do schema é
+    UTC, então o log de eventos gravado durante o ensaio (main_window.py
+    passa timestamp=None) saía com o horário errado na coluna "Timestamp"
+    do relatório exportado."""
+    board = BoardRepository(db).get_or_create("PCB-001", "PN-123", "RevA")
+    operator = OperatorRepository(db).get_or_create("Willian Lima")
+    session = TestSessionRepository(db).create(
+        TestSession(
+            id=None,
+            board_id=board.id,
+            serial_number="SN-0001",
+            operator_id=operator.id,
+            test_parameter_config_id=None,
+            config_snapshot_json=json.dumps({}),
+            production_order=None,
+            observations=None,
+            status=TestSessionStatus.FAULTED,
+        )
+    )
+    repo = EventLogRepository(db)
+    before = dt.datetime.now()
+    repo.add(EventLogEntry(None, session.id, None, "INFO", "state_machine", "Início do ensaio"))
+    after = dt.datetime.now()
+    recorded = dt.datetime.strptime(repo.list_for_session(session.id)[0].timestamp, "%Y-%m-%d %H:%M:%S")
+    assert before - dt.timedelta(seconds=2) <= recorded <= after + dt.timedelta(seconds=2)

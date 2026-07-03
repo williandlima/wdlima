@@ -1,6 +1,7 @@
 """Testes de persistência: schema, repositories e batch insert de amostras."""
 from __future__ import annotations
 
+import datetime as dt
 import json
 from pathlib import Path
 
@@ -374,6 +375,36 @@ def test_evaluation_is_unique_per_session(db: Database) -> None:
         Evaluation(None, session.id, operator.id, EvaluationResult.APPROVED, "OK")
     )
     assert repo.get_for_session(session.id) == created
+
+
+def test_evaluation_evaluated_at_uses_local_wall_clock_time(db: Database) -> None:
+    """evaluated_at precisa refletir o relógio LOCAL do sistema, igual a
+    started_at/finished_at (gui/main_window.py) -- não o DEFAULT
+    (datetime('now')) do SQLite, que é UTC. Senão a "Data da avaliação" nos
+    relatórios sai com o horário errado sempre que o fuso local não é UTC
+    (ex.: Brasil, UTC-3)."""
+    board = BoardRepository(db).get_or_create("PCB-001", "PN-123", "RevA")
+    operator = OperatorRepository(db).get_or_create("Willian Lima")
+    session = TestSessionRepository(db).create(
+        TestSession(
+            id=None,
+            board_id=board.id,
+            serial_number="SN-0001",
+            operator_id=operator.id,
+            test_parameter_config_id=None,
+            config_snapshot_json=json.dumps({}),
+            production_order=None,
+            observations=None,
+            status=TestSessionStatus.COMPLETED,
+        )
+    )
+    before = dt.datetime.now()
+    created = EvaluationRepository(db).create(
+        Evaluation(None, session.id, operator.id, EvaluationResult.APPROVED, "OK")
+    )
+    after = dt.datetime.now()
+    recorded = dt.datetime.strptime(created.evaluated_at, "%Y-%m-%d %H:%M:%S")
+    assert before - dt.timedelta(seconds=2) <= recorded <= after + dt.timedelta(seconds=2)
 
 
 def test_event_log_records_failures_tied_to_session(db: Database) -> None:

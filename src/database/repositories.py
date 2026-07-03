@@ -6,6 +6,7 @@ trabalha com os dataclasses de `models.py`.
 """
 from __future__ import annotations
 
+import datetime as dt
 import json
 import sqlite3
 from dataclasses import asdict
@@ -376,16 +377,23 @@ class EvaluationRepository:
 
     def create(self, evaluation: Evaluation) -> Evaluation:
         conn = self._db.connection
+        # `evaluated_at` é gravado aqui em hora LOCAL, igual a started_at/
+        # finished_at (gui/main_window.py) -- o DEFAULT (datetime('now')) do
+        # schema é hora UTC do SQLite, o que fazia a "Data da avaliação" dos
+        # relatórios sair adiantada/atrasada em relação ao horário real do
+        # operador (o fuso do Brasil difere de UTC).
+        evaluated_at = evaluation.evaluated_at or dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         cursor = conn.execute(
             """
-            INSERT INTO evaluations (test_session_id, operator_id, result, comment)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO evaluations (test_session_id, operator_id, result, comment, evaluated_at)
+            VALUES (?, ?, ?, ?, ?)
             """,
             (
                 evaluation.test_session_id,
                 evaluation.operator_id,
                 evaluation.result.value,
                 evaluation.comment,
+                evaluated_at,
             ),
         )
         conn.commit()

@@ -149,6 +149,25 @@ class EvaluationView(QtWidgets.QWidget):
             )
             return
 
+        # Pergunta ANTES de gravar a avaliação/liberar o state machine --
+        # "Cancelar" precisa realmente voltar para a tela de ensaio, sem
+        # nenhuma escrita no banco, não só pular a geração do relatório.
+        choice = QtWidgets.QMessageBox.question(
+            self,
+            "Salvar relatório do ensaio?",
+            "Deseja salvar os dados deste ensaio (gerar relatório em Word/Excel/PDF)?\n\n"
+            "Sim: escolher onde salvar\n"
+            "Não: não salvar e encerrar o ensaio\n"
+            "Cancelar: voltar para a tela de ensaio",
+            QtWidgets.QMessageBox.StandardButton.Yes
+            | QtWidgets.QMessageBox.StandardButton.No
+            | QtWidgets.QMessageBox.StandardButton.Cancel,
+            QtWidgets.QMessageBox.StandardButton.Cancel,
+        )
+        if choice == QtWidgets.QMessageBox.StandardButton.Cancel:
+            return
+        save_report = choice == QtWidgets.QMessageBox.StandardButton.Yes
+
         evaluation = self._evaluation_repo.create(
             Evaluation(
                 id=None,
@@ -161,4 +180,6 @@ class EvaluationView(QtWidgets.QWidget):
 
         self._state_machine.mark_evaluated()
 
-        self.evaluation_submitted.emit({"evaluation": evaluation, "session": self._session})
+        self.evaluation_submitted.emit(
+            {"evaluation": evaluation, "session": self._session, "save_report": save_report}
+        )

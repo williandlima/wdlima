@@ -256,6 +256,170 @@ def test_evaluation_submitted_saves_report_and_clears_registration(
     assert window.stack.currentWidget() is window.registration_view
 
 
+def test_evaluation_submitted_without_save_report_skips_file_dialog(
+    qtbot, app_config, tmp_path: Path, monkeypatch
+) -> None:
+    """"Não" (não salvar e encerrar ensaio): finaliza e limpa a Tela 1 igual
+    ao fluxo de salvar, mas sem abrir o diálogo "onde salvar" nem gerar
+    nenhum arquivo de relatório."""
+    from PySide6 import QtWidgets
+
+    from database.models import (
+        Evaluation,
+        EvaluationResult,
+        TestSession,
+        TestSessionStatus,
+    )
+    from database.repositories import (
+        BoardRepository,
+        EvaluationRepository,
+        OperatorRepository,
+        TestSessionRepository,
+    )
+    from gui.main_window import MainWindow
+
+    db = Database(tmp_path / "evaluation_flow_no_save.db")
+    db.connect()
+
+    operator = OperatorRepository(db).get_or_create("Joao Silva", "IF-1")
+    board = BoardRepository(db).get_or_create("BRD-001", "PN-123", "A")
+    session = TestSessionRepository(db).create(
+        TestSession(
+            id=None,
+            board_id=board.id,
+            serial_number="SN-002",
+            operator_id=operator.id,
+            test_parameter_config_id=None,
+            config_snapshot_json='{"nominal_voltage": 5.0}',
+            production_order="OP-9",
+            observations=None,
+            status=TestSessionStatus.RUNNING,
+            started_at="2026-06-25 10:00:00",
+        )
+    )
+    TestSessionRepository(db).update_status(session.id, TestSessionStatus.COMPLETED)
+    EvaluationRepository(db).create(
+        Evaluation(
+            id=None,
+            test_session_id=session.id,
+            operator_id=operator.id,
+            result=EvaluationResult.APPROVED,
+            comment=None,
+        )
+    )
+
+    window = MainWindow(app_config, db)
+    qtbot.addWidget(window)
+    window.registration_view.code_edit.setText("BRD-001")
+
+    save_dialog_calls = []
+    monkeypatch.setattr(
+        QtWidgets.QFileDialog,
+        "getSaveFileName",
+        staticmethod(lambda *a, **k: save_dialog_calls.append(1) or ("", "")),
+    )
+
+    window._board = board
+    window._operator = operator
+    window._on_evaluation_submitted({"evaluation": None, "session": session, "save_report": False})
+
+    assert save_dialog_calls == []  # nenhum diálogo "onde salvar" foi aberto
+    assert window._session is None
+    assert window.stack.currentWidget() is window.registration_view
+
+
+def test_evaluation_view_asks_save_choice_before_committing(qtbot, tmp_path: Path, monkeypatch) -> None:
+    """"Confirmar avaliação" pergunta Sim/Não/Cancelar ANTES de gravar a
+    Evaluation e liberar o state machine -- Cancelar precisa voltar para a
+    tela de ensaio sem nenhuma escrita no banco, não só pular o relatório."""
+    from unittest.mock import MagicMock
+
+    from PySide6 import QtWidgets
+
+    from core.state_machine import TestState, TestStateMachine
+    from database.models import TestSession, TestSessionStatus
+    from database.repositories import (
+        BoardRepository,
+        EvaluationRepository,
+        OperatorRepository,
+        TestSessionRepository,
+    )
+    from gui.evaluation_view import EvaluationView
+
+    db = Database(tmp_path / "evaluation_view.db")
+    db.connect()
+    board = BoardRepository(db).get_or_create("BRD-001", "PN-123", "A")
+    operator = OperatorRepository(db).get_or_create("Joao Silva")
+    evaluation_repo = EvaluationRepository(db)
+
+    def build_view(serial: str):
+        session = TestSessionRepository(db).create(
+            TestSession(
+                id=None,
+                board_id=board.id,
+                serial_number=serial,
+                operator_id=operator.id,
+                test_parameter_config_id=None,
+                config_snapshot_json="{}",
+                production_order=None,
+                observations=None,
+                status=TestSessionStatus.COMPLETED,
+            )
+        )
+        state_machine = MagicMock(spec=TestStateMachine)
+        state_machine.state = TestState.AWAITING_MANUAL_EVALUATION
+        state_machine.termination_reason = None
+        view = EvaluationView(evaluation_repo)
+        qtbot.addWidget(view)
+        view.load_session(session, operator, state_machine, [])
+        view.approved_radio.setChecked(True)
+        return view, state_machine, session
+
+    # Cancelar: nenhuma gravação, nenhum sinal emitido, state machine intocado.
+    view, sm, session = build_view("SN-CANCEL")
+    emitted = []
+    view.evaluation_submitted.connect(emitted.append)
+    monkeypatch.setattr(
+        QtWidgets.QMessageBox,
+        "question",
+        staticmethod(lambda *a, **k: QtWidgets.QMessageBox.StandardButton.Cancel),
+    )
+    view._on_submit()
+    assert emitted == []
+    assert evaluation_repo.get_for_session(session.id) is None
+    sm.mark_evaluated.assert_not_called()
+
+    # Não: grava a avaliação e libera o state machine, mas save_report=False.
+    view, sm, session = build_view("SN-NO")
+    emitted = []
+    view.evaluation_submitted.connect(emitted.append)
+    monkeypatch.setattr(
+        QtWidgets.QMessageBox,
+        "question",
+        staticmethod(lambda *a, **k: QtWidgets.QMessageBox.StandardButton.No),
+    )
+    view._on_submit()
+    assert len(emitted) == 1
+    assert emitted[0]["save_report"] is False
+    assert evaluation_repo.get_for_session(session.id) is not None
+    sm.mark_evaluated.assert_called_once()
+
+    # Sim: idem, mas save_report=True.
+    view, sm, session = build_view("SN-YES")
+    emitted = []
+    view.evaluation_submitted.connect(emitted.append)
+    monkeypatch.setattr(
+        QtWidgets.QMessageBox,
+        "question",
+        staticmethod(lambda *a, **k: QtWidgets.QMessageBox.StandardButton.Yes),
+    )
+    view._on_submit()
+    assert len(emitted) == 1
+    assert emitted[0]["save_report"] is True
+    assert evaluation_repo.get_for_session(session.id) is not None
+    sm.mark_evaluated.assert_called_once()
+
+
 def test_parameters_view_back_button_emits_signal(qtbot, app_config, tmp_path: Path) -> None:
     from database.repositories import TestParameterConfigRepository
     from dataclasses import asdict

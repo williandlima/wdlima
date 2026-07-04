@@ -51,6 +51,7 @@ from gui.manual_output_dialog import ManualOutputDialog
 from gui.registration_view import RegistrationView
 from gui.styles import load_theme
 from gui.test_parameters_view import TestParametersView
+from gui.widgets.aux_serial_panel import AuxSerialPanel
 from gui.widgets.header_bar import HeaderBar
 from gui.widgets.live_chart import LiveChart
 from gui.widgets.segment_display import SegmentDisplay
@@ -276,6 +277,12 @@ class _MonitoringPanel(QtWidgets.QWidget):
         self.event_log_edit.setReadOnly(True)
         self.event_log_edit.setMaximumHeight(80)
         layout.addWidget(self.event_log_edit)
+
+        # Monitor serial/CAN opcional da placa -- independente do state
+        # machine do ensaio (o operador liga/desliga quando quiser, mesmo
+        # sem um ensaio rodando).
+        self.aux_serial_panel = AuxSerialPanel()
+        layout.addWidget(self.aux_serial_panel)
 
     def reset(
         self,
@@ -930,4 +937,5 @@ class MainWindow(QtWidgets.QMainWindow):
             self._probe_worker.wait(3000)
         if self._instrument.is_connected:
             self._instrument.disconnect()
+        self.monitoring_panel.aux_serial_panel.shutdown()
         super().closeEvent(event)

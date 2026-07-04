@@ -879,3 +879,82 @@ def test_show_toast_creates_non_blocking_widget(qtbot) -> None:
     assert toast.parentWidget() is host
     assert toast.text() == "Mensagem de teste"
     assert toast.property("toastLevel") == "success"
+
+
+def test_aux_serial_panel_simulate_mode_shows_incoming_data(qtbot) -> None:
+    """Monitor serial/CAN opcional: em modo Simulação, conectar deve mostrar
+    algo chegando na telinha sem precisar do conversor físico, e desconectar
+    deve encerrar a thread de leitura de forma limpa (sem travar o teste)."""
+    from gui.widgets.aux_serial_panel import AuxSerialPanel
+
+    panel = AuxSerialPanel()
+    qtbot.addWidget(panel)
+
+    panel.simulate_check.setChecked(True)
+    panel.connect_button.click()
+    assert panel.is_connected() is True
+    assert panel.connect_button.text() == "Desconectar"
+
+    qtbot.waitUntil(lambda: bool(panel.output_edit.toPlainText().strip()), timeout=3000)
+    assert "|" in panel.output_edit.toPlainText()  # moldura hex + ascii de _append_line
+
+    panel.connect_button.click()  # desconectar
+    qtbot.waitUntil(lambda: panel.is_connected() is False, timeout=3000)
+    assert panel.connect_button.text() == "Conectar"
+    assert panel.port_combo.isEnabled() is True
+
+
+def test_aux_serial_panel_warns_when_no_port_selected(qtbot, monkeypatch) -> None:
+    from PySide6 import QtWidgets
+
+    from gui.widgets.aux_serial_panel import AuxSerialPanel
+
+    panel = AuxSerialPanel()
+    qtbot.addWidget(panel)
+    panel.port_combo.clear()  # simula ambiente sem nenhuma porta COM disponível
+
+    warned = []
+    monkeypatch.setattr(
+        QtWidgets.QMessageBox, "warning", staticmethod(lambda *a, **k: warned.append(1))
+    )
+    panel.connect_button.click()
+
+    assert warned == [1]
+    assert panel.is_connected() is False
+
+
+def test_aux_serial_panel_clear_button_empties_output(qtbot) -> None:
+    from gui.widgets.aux_serial_panel import AuxSerialPanel
+
+    panel = AuxSerialPanel()
+    qtbot.addWidget(panel)
+
+    panel.output_edit.setPlainText("linha antiga")
+    panel.clear_button.click()
+
+    assert panel.output_edit.toPlainText() == ""
+
+
+def test_main_window_close_event_shuts_down_aux_serial_panel(qtbot, app_config, tmp_path: Path) -> None:
+    """closeEvent precisa parar a thread do monitor serial/CAN -- sem isso, a
+    porta ficaria presa aberta (ou a thread travando o encerramento do app)."""
+    from gui.main_window import MainWindow
+
+    db = Database(tmp_path / "aux_serial_close.db")
+    db.connect()
+    window = MainWindow(app_config, db)
+    qtbot.addWidget(window)
+
+    panel = window.monitoring_panel.aux_serial_panel
+    panel.simulate_check.setChecked(True)
+    panel.connect_button.click()
+    qtbot.waitUntil(lambda: panel.is_connected() is True, timeout=2000)
+    worker = panel._worker
+
+    window.close()
+
+    # shutdown() chama wait(): quando close() retorna, a thread já terminou
+    # de verdade (isRunning() não depende do sinal 'finished' ter sido
+    # processado pela GUI ainda, ao contrário de is_connected()).
+    assert worker.isRunning() is False
+    db.close()

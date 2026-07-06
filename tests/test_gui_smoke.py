@@ -673,24 +673,51 @@ def test_set_board_autoloads_most_recent_saved_config(qtbot, app_config, tmp_pat
     db.close()
 
 
-def test_live_samples_uses_rolling_window(qtbot, app_config, tmp_path: Path) -> None:
-    """O gráfico ao vivo usa janela rolante (memória limitada em ensaios longos)."""
-    from collections import deque
-
+def test_live_chart_history_keeps_full_duration_visible_in_long_tests(
+    qtbot, app_config, tmp_path: Path
+) -> None:
+    """Regressão: o gráfico ao vivo usava um FIFO de amostras brutas com
+    tamanho máximo -- em ensaios mais longos que essa janela, as amostras
+    mais antigas eram descartadas e a curva "apagava" o início, mesmo com
+    o eixo X ainda mostrando a duração total configurada. O histórico por
+    bins (core/live_chart_history.py) tem memória limitada pelo NÚMERO DE
+    BINS, não pela quantidade de amostras -- a curva inteira (do início ao
+    fim) precisa continuar visível não importa há quanto tempo o ensaio
+    esteja rodando."""
+    from core.live_chart_history import LiveChartHistory
     from core.sampling_buffer import Sample
     from gui.main_window import MainWindow
 
-    db = Database(tmp_path / "rolling.db")
+    db = Database(tmp_path / "live_chart_history.db")
     db.connect()
     window = MainWindow(app_config, db)
     qtbot.addWidget(window)
 
-    window._live_samples = deque(maxlen=5)
-    for i in range(20):
-        window._on_sample(Sample(timestamp=float(i), step_index=0, voltage=5.0, current=0.5))
+    # Duração total pequena (10 bins) simulando um ensaio "longo" com muito
+    # mais amostras do que bins -- exatamente o cenário do bug relatado.
+    window._live_chart_history = LiveChartHistory(duration_s=10.0, bin_count=10)
+    for i in range(1000):
+        window._on_sample(
+            Sample(timestamp=i * 0.01, step_index=0, voltage=5.0, current=0.5)
+        )
 
-    assert len(window._live_samples) == 5  # só os 5 mais recentes ficam em memória
+    snapshot = window._live_chart_history.snapshot()
+    assert len(snapshot) == 10  # memória limitada pelo Nº DE BINS, não pelas 1000 amostras
+    # A amostra do PRIMEIRO instante do ensaio continua representada -- não
+    # foi descartada como seria com um FIFO de tamanho fixo.
+    assert snapshot[0].timestamp < 1.0
     db.close()
+
+
+def test_live_chart_history_bounds_memory_regardless_of_sample_count() -> None:
+    from core.live_chart_history import LiveChartHistory
+    from core.sampling_buffer import Sample
+
+    history = LiveChartHistory(duration_s=3600.0, bin_count=500)
+    for i in range(100_000):
+        history.add_sample(Sample(timestamp=i * 0.05, step_index=0, voltage=5.0, current=0.5))
+
+    assert len(history.snapshot()) <= 500
 
 
 def test_parameters_duration_unit_conversion(qtbot, app_config, tmp_path: Path) -> None:

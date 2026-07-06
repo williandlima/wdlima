@@ -17,13 +17,13 @@ from __future__ import annotations
 import datetime as dt
 import json
 import logging
-from collections import deque
 from dataclasses import asdict
 from pathlib import Path
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from config import AppConfig
+from core.live_chart_history import LiveChartHistory
 from core.sampling_buffer import Sample, SamplingBuffer
 from core.state_machine import TestRunConfig, TestState, TestStateMachine
 from database.database import Database
@@ -75,6 +75,11 @@ _TERMINATION_TO_SESSION_STATUS = {
     TestState.COMM_ERROR: TestSessionStatus.COMM_ERROR,
     TestState.FAULTED: TestSessionStatus.FAULTED,
 }
+
+# Pontos plotados no gráfico ao vivo (ver core/live_chart_history.py) --
+# memória constante independente da duração do ensaio, ao contrário do FIFO
+# de amostras brutas usado antes.
+_LIVE_CHART_BIN_COUNT = 500
 
 # Conteúdo estático do botão "Ajuda" do cabeçalho (ver HeaderBar/_on_help) --
 # texto único de ponta a ponta em vez de ajuda contextual por tela, para
@@ -379,11 +384,12 @@ class MainWindow(QtWidgets.QMainWindow):
         # Escolha do operador na confirmação de abortar (seção 3.3): mantém
         # os dados para avaliação/relatório ou descarta a sessão abortada.
         self._discard_aborted_session = False
-        # Janela rolante: limita a memória do gráfico ao vivo em ensaios longos.
-        # O relatório usa as amostras GRAVADAS no banco, não esta lista.
-        self._live_samples: deque[Sample] = deque(
-            maxlen=app_config.test_defaults.live_buffer_maxlen
-        )
+        # Histórico do gráfico ao vivo (ver core/live_chart_history.py) --
+        # memória limitada pelo NÚMERO DE BINS, não por um FIFO de amostras
+        # que "apagava" o início da curva em ensaios longos. Criado de novo
+        # a cada ensaio (precisa da duração total, só conhecida ali).
+        # O relatório usa as amostras GRAVADAS no banco, não este histórico.
+        self._live_chart_history: LiveChartHistory | None = None
         self._last_log_text = ""
         # Última mensagem de erro/aviso do ensaio, para diagnóstico ao terminar.
         self._last_error_message: str | None = None
@@ -509,7 +515,6 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         self._session = session
         self._last_error_message = None
-        self._live_samples = deque(maxlen=self._app_config.test_defaults.live_buffer_maxlen)
 
         buffer = SamplingBuffer(
             live_buffer_maxlen=self._app_config.test_defaults.live_buffer_maxlen,
@@ -544,6 +549,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         steps = run_config.steps()
         total_duration_s = _total_monitored_duration_s(steps)
+        self._live_chart_history = LiveChartHistory(total_duration_s, bin_count=_LIVE_CHART_BIN_COUNT)
         self.monitoring_panel.reset(
             run_config.voltage_min,
             run_config.voltage_max,
@@ -573,10 +579,10 @@ class MainWindow(QtWidgets.QMainWindow):
         )
 
     def _on_sample(self, sample: Sample) -> None:
-        self._live_samples.append(sample)  # deque limitado: descarta os mais antigos
         self.monitoring_panel.on_sample(sample)
-        decimated = SamplingBuffer.decimate(list(self._live_samples), max_points=500)
-        self.monitoring_panel.live_chart.update_samples(decimated)
+        if self._live_chart_history is not None:
+            self._live_chart_history.add_sample(sample)
+            self.monitoring_panel.live_chart.update_samples(self._live_chart_history.snapshot())
 
     def _on_event(self, level: str, message: str) -> None:
         if level in ("ERROR", "WARNING"):

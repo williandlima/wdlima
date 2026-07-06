@@ -49,15 +49,39 @@ def test_snapshot_skips_empty_bins() -> None:
     assert len(snapshot) == 2  # só os 2 bins com amostra aparecem, não os 10
 
 
-def test_bin_averages_multiple_samples() -> None:
+def test_bin_preserves_min_and_max_not_average() -> None:
+    """Envelope: um bin com variação emite vale E pico (não a média), para a
+    curva cobrir toda a amplitude. Antes a média achatava picos."""
     history = LiveChartHistory(duration_s=10.0, bin_count=1)
     history.add_sample(Sample(timestamp=_T0 + 1.0, step_index=0, voltage=4.0, current=1.0))
     history.add_sample(Sample(timestamp=_T0 + 2.0, step_index=0, voltage=6.0, current=3.0))
 
     snapshot = history.snapshot()
-    assert len(snapshot) == 1
-    assert snapshot[0].voltage == pytest.approx(5.0)
-    assert snapshot[0].current == pytest.approx(2.0)
+    assert len(snapshot) == 2  # vale + pico, não 1 ponto com a média
+    currents = [s.current for s in snapshot]
+    assert min(currents) == pytest.approx(1.0)
+    assert max(currents) == pytest.approx(3.0)  # o pico chega, não a média (2.0)
+
+
+def test_long_test_current_peak_reaches_graph_at_visor_value() -> None:
+    """Bug relatado: em testes longos (>1h), o pico de corrente não chegava
+    no gráfico no valor real -- a média do bin (largo) o achatava, e não
+    batia com o visor (que mostra o instantâneo). Cenário: 1h, 500 bins
+    (~7 s/bin), 20 amostras/s de baseline 0,5 A e UM pico de 5,0 A no meio
+    de um bin. O pico (5,0 A) PRECISA aparecer no snapshot -- a média daria
+    ~0,53 A."""
+    history = LiveChartHistory(duration_s=3600.0, bin_count=500)
+    peak_current = 5.0
+    peak_at = 1800.0  # metade do ensaio
+    step_s = 0.05  # 20 Hz
+    n = int(3600.0 / step_s)
+    for i in range(n):
+        t = i * step_s
+        current = peak_current if abs(t - peak_at) < step_s / 2 else 0.5
+        history.add_sample(Sample(timestamp=_T0 + t, step_index=0, voltage=12.0, current=current))
+
+    max_current_plotted = max(s.current for s in history.snapshot())
+    assert max_current_plotted == pytest.approx(peak_current)  # não a média (~0,53 A)
 
 
 def test_samples_beyond_duration_clamp_into_last_bin_without_crashing() -> None:

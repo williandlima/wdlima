@@ -10,7 +10,14 @@
             "name": "Python: main.py",
             "program": "${workspaceFolder}/main.py",
             "console": "integratedTerminal",
-            "cwd": "${workspaceFolder}"
+            "cwd": "${workspaceFolder}",
+            // Fixa o interpretador do venv pyside6-py311 (onde o PySide6 está
+            // instalado). Sem isto, o depurador (F5) caía no Python global
+            // "recomendado" pelo seletor (ex.: Python 3.13-32), que NAO tem o
+            // PySide6 -> "ModuleNotFoundError: No module named 'PySide6'".
+            // ${env:USERPROFILE} = C:\Users\<seu_usuario>; ajuste o nome do
+            // venv aqui se voce criar o ambiente com outro nome.
+            "python": "${env:USERPROFILE}\\envs\\pyside6-py311\\Scripts\\python.exe"
         }
     ]
 }

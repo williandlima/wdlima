@@ -828,6 +828,10 @@ def test_manual_output_dialog_energizes_and_reads_in_simulation(
     dialog._on_turn_off()
     qtbot.waitUntil(lambda: not dialog._output_on, timeout=5000)
     assert dialog.on_button.isEnabled()
+    # Ajuste fino: com a saída desligada, os visores precisam mostrar 0 V/0 A
+    # (saída real da fonte), não ficar congelados na última leitura ao vivo.
+    assert dialog.voltage_display.text() == "0.000 V"
+    assert dialog.current_display.text() == "0.000 A"
 
     dialog._shutdown()
     assert not instrument.is_connected

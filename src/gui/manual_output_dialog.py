@@ -257,6 +257,13 @@ class ManualOutputDialog(QtWidgets.QDialog):
         self.voltage_spin.setEnabled(True)
         self.current_spin.setEnabled(True)
         self.range_combo.setEnabled(bool(self._instrument.ranges))
+        # Saída desligada -> os terminais da fonte estão em 0 V / 0 A. O poller
+        # já foi parado, então sem isto o visor ficava CONGELADO na última
+        # leitura com a saída ligada (ex.: 16 V), não refletindo a saída real
+        # da fonte. Zera os displays para bater com o que a fonte está
+        # fisicamente entregando agora.
+        self.voltage_display.set_value(0.0)
+        self.current_display.set_value(0.0)
 
     # -- infraestrutura -----------------------------------------------------
 

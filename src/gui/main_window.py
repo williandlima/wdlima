@@ -51,6 +51,7 @@ from gui.manual_output_dialog import ManualOutputDialog
 from gui.registration_view import RegistrationView
 from gui.styles import load_theme
 from gui.test_parameters_view import TestParametersView
+from gui.widgets.aux_serial_panel import AuxSerialPanel
 from gui.widgets.header_bar import HeaderBar
 from gui.widgets.live_chart import LiveChart
 from gui.widgets.segment_display import SegmentDisplay
@@ -277,6 +278,12 @@ class _MonitoringPanel(QtWidgets.QWidget):
         self.event_log_edit.setMaximumHeight(80)
         layout.addWidget(self.event_log_edit)
 
+        # Monitor serial/CAN opcional da placa -- independente do state
+        # machine do ensaio (o operador liga/desliga quando quiser, mesmo
+        # sem um ensaio rodando).
+        self.aux_serial_panel = AuxSerialPanel()
+        layout.addWidget(self.aux_serial_panel)
+
     def reset(
         self,
         voltage_min: float,
@@ -364,6 +371,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self._session: TestSession | None = None
         self._state_machine: TestStateMachine | None = None
         self._worker: TestRunWorker | None = None
+        # Última config/run_config usados, para "Refazer ensaio" (evaluation_view)
+        # reiniciar o mesmo ensaio sem passar de novo por Cadastro/Parâmetros.
+        self._last_test_parameter_config = None
+        self._last_run_config: TestRunConfig | None = None
         self._probe_worker: ConnectionProbeWorker | None = None
         # Escolha do operador na confirmação de abortar (seção 3.3): mantém
         # os dados para avaliação/relatório ou descarta a sessão abortada.
@@ -427,8 +438,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self.registration_view.registration_submitted.connect(self._on_registration_submitted)
         self.parameters_view.parameters_submitted.connect(self._on_parameters_submitted)
         self.parameters_view.back_requested.connect(self._on_parameters_back)
+        self.parameters_view.config_saved.connect(self._on_config_saved)
         self.monitoring_panel.abort_requested.connect(self._on_abort_requested)
         self.evaluation_view.evaluation_submitted.connect(self._on_evaluation_submitted)
+        self.evaluation_view.redo_requested.connect(self._on_redo_requested)
 
         self._update_step_indicator(self.stack.currentIndex())
 
@@ -460,9 +473,14 @@ class MainWindow(QtWidgets.QMainWindow):
         """
         self._switch_to(self.registration_view)
 
+    def _on_config_saved(self, config_name: str) -> None:
+        show_toast(self, f'Configuração "{config_name}" salva.', level="success", duration_ms=3000)
+
     def _on_parameters_submitted(self, data: dict) -> None:
         config = data["test_parameter_config"]
         run_config: TestRunConfig = data["run_config"]
+        self._last_test_parameter_config = config
+        self._last_run_config = run_config
         registration = self._registration_data
         assert self._board is not None and self._operator is not None and registration is not None
 
@@ -704,6 +722,30 @@ class MainWindow(QtWidgets.QMainWindow):
         self.evaluation_view.load_session(self._session, self._operator, self._state_machine, samples)
         self._switch_to(self.evaluation_view)
 
+    def _on_redo_requested(self) -> None:
+        """"Refazer ensaio" (EvaluationView): a tentativa atual já foi
+        descartada (sem avaliação/relatório, ver EvaluationView._on_redo) --
+        reinicia o ensaio agora com a mesma placa/operador/S/N e a última
+        configuração usada, sem passar de novo por Cadastro/Parâmetros. O
+        instrumento já foi desconectado por _on_worker_finished antes de
+        chegar na tela de avaliação, então reabrir a porta aqui é seguro.
+        """
+        if (
+            self._registration_data is None
+            or self._last_test_parameter_config is None
+            or self._last_run_config is None
+        ):
+            return
+        self._session = None
+        self._state_machine = None
+        self._worker = None
+        self._on_parameters_submitted(
+            {
+                "test_parameter_config": self._last_test_parameter_config,
+                "run_config": self._last_run_config,
+            }
+        )
+
     def _on_evaluation_submitted(self, data: dict) -> None:
         session: TestSession = data["session"]
         # "save_report" já reflete a escolha Sim/Não do operador (EvaluationView
@@ -714,6 +756,7 @@ class MainWindow(QtWidgets.QMainWindow):
         else:
             show_toast(self, "Ensaio encerrado sem salvar relatório.", level="info", duration_ms=4000)
 
+        board, operator = self._board, self._operator
         self._session = None
         self._state_machine = None
         self._worker = None
@@ -721,7 +764,27 @@ class MainWindow(QtWidgets.QMainWindow):
         self._operator = None
         self._registration_data = None
         self.registration_view.refresh_operator_history()
-        self.registration_view.clear_form()
+
+        # Oferece repetir a mesma placa/operador para a próxima unidade do
+        # lote (só o S/N muda) -- evita redigitar código/P/N/revisão a cada
+        # exemplar testado em sequência. "Não" volta ao cadastro em branco.
+        test_next_unit = board is not None and operator is not None and (
+            QtWidgets.QMessageBox.question(
+                self,
+                "Testar outra unidade desta placa?",
+                f'Deseja iniciar agora outro ensaio da placa "{board.code}" '
+                f"(P/N {board.part_number}, rev. {board.revision})?\n\n"
+                "Sim: mantém placa e operador, só pede o novo número de série.\n"
+                "Não: volta ao cadastro em branco.",
+                QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No,
+                QtWidgets.QMessageBox.StandardButton.No,
+            )
+            == QtWidgets.QMessageBox.StandardButton.Yes
+        )
+        if test_next_unit and board is not None and operator is not None:
+            self.registration_view.prefill_for_repeat(board, operator)
+        else:
+            self.registration_view.clear_form()
         self._switch_to(self.registration_view)
 
     def _save_report(self, test_session_id: int) -> None:
@@ -874,4 +937,5 @@ class MainWindow(QtWidgets.QMainWindow):
             self._probe_worker.wait(3000)
         if self._instrument.is_connected:
             self._instrument.disconnect()
+        self.monitoring_panel.aux_serial_panel.shutdown()
         super().closeEvent(event)

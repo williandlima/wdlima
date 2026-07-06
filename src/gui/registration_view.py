@@ -10,7 +10,7 @@ import datetime as dt
 
 from PySide6 import QtCore, QtWidgets
 
-from database.models import Operator
+from database.models import Board, Operator
 from database.repositories import BoardRepository, OperatorRepository, RecordInUseError
 from version import APP_VERSION
 
@@ -231,6 +231,24 @@ class RegistrationView(QtWidgets.QWidget):
         self.serial_number_edit.clear()
         self.production_order_edit.clear()
         self.observations_edit.clear()
+
+    def prefill_for_repeat(self, board: Board, operator: Operator) -> None:
+        """Reaproveita placa e operador do ensaio recém-avaliado, deixando só
+        S/N, ordem de produção e observações em branco -- usado quando o
+        operador escolhe testar outra unidade da mesma placa em seguida
+        (ver MainWindow._on_evaluation_submitted), evitando redigitar
+        código/P/N/revisão/operador/IF a cada exemplar de um mesmo lote."""
+        self.clear_form()
+        self.code_edit.setText(board.code)
+        self.part_number_edit.setText(board.part_number)
+        self.revision_edit.setText(board.revision)
+        index = self.operator_combo.findText(operator.name)
+        if index >= 0:
+            self.operator_combo.setCurrentIndex(index)
+        else:
+            self.operator_combo.setCurrentText(operator.name)
+        self.if_edit.setText(operator.if_number or "")
+        self.serial_number_edit.setFocus()
 
     def _on_operator_changed(self, name: str) -> None:
         index = self.operator_combo.findText(name)

@@ -26,6 +26,7 @@ from database.repositories import EvaluationRepository
 
 class EvaluationView(QtWidgets.QWidget):
     evaluation_submitted = QtCore.Signal(dict)
+    redo_requested = QtCore.Signal()
 
     def __init__(
         self,
@@ -82,9 +83,24 @@ class EvaluationView(QtWidgets.QWidget):
         self.comment_edit.setMaximumHeight(100)
         decision_layout.addWidget(self.comment_edit)
 
+        buttons_row = QtWidgets.QHBoxLayout()
+        # "Refazer ensaio": descarta esta tentativa (sem avaliação nem
+        # relatório) e roda o ensaio de novo, com a mesma placa/operador/S/N
+        # e a mesma configuração -- útil quando o resultado saiu ruim por
+        # causa de montagem/config, não da placa em si, e não vale a pena
+        # gastar tempo avaliando uma tentativa que já se sabe descartável.
+        self.redo_button = QtWidgets.QPushButton("Refazer ensaio")
+        self.redo_button.setToolTip(
+            "Descarta esta tentativa (sem avaliação nem relatório) e inicia um "
+            "novo ensaio agora, com a mesma placa, operador e configuração."
+        )
+        self.redo_button.clicked.connect(self._on_redo)
         self.submit_button = QtWidgets.QPushButton("Confirmar avaliação")
         self.submit_button.clicked.connect(self._on_submit)
-        decision_layout.addWidget(self.submit_button)
+        buttons_row.addWidget(self.redo_button)
+        buttons_row.addStretch()
+        buttons_row.addWidget(self.submit_button)
+        decision_layout.addLayout(buttons_row)
 
         layout.addWidget(decision_group)
         layout.addStretch()
@@ -183,3 +199,22 @@ class EvaluationView(QtWidgets.QWidget):
         self.evaluation_submitted.emit(
             {"evaluation": evaluation, "session": self._session, "save_report": save_report}
         )
+
+    def _on_redo(self) -> None:
+        if self._session is None:
+            QtWidgets.QMessageBox.warning(self, "Nenhum teste carregado", "Não há teste para refazer.")
+            return
+
+        confirm = QtWidgets.QMessageBox.question(
+            self,
+            "Refazer ensaio?",
+            f"Isso vai descartar esta tentativa (S/N {self._session.serial_number}) sem avaliação "
+            "nem relatório, e iniciar um novo ensaio agora com a mesma placa, operador e "
+            "configuração.\n\nContinuar?",
+            QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No,
+            QtWidgets.QMessageBox.StandardButton.No,
+        )
+        if confirm != QtWidgets.QMessageBox.StandardButton.Yes:
+            return
+
+        self.redo_requested.emit()

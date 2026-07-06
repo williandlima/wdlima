@@ -1,4 +1,10 @@
 {
+    // Interpretador padrão: o venv pyside6-py311 (onde o PySide6 está
+    // instalado). Usado pelo terminal, pelos testes e como interpretador
+    // padrão quando nenhum outro está selecionado. ${env:USERPROFILE} =
+    // C:\Users\<seu_usuario>. O launch.json também fixa este mesmo caminho
+    // para o depurador (F5), que antes caía no Python global sem PySide6.
+    "python.defaultInterpreterPath": "${env:USERPROFILE}\\envs\\pyside6-py311\\Scripts\\python.exe",
     "python.testing.pytestEnabled": true,
     "python.testing.unittestEnabled": false,
     "python.testing.pytestArgs": [
@@ -13,7 +19,10 @@
         "**/*.pyc": true,
         ".pytest_cache": true
     },
-    "python-envs.defaultEnvManager": "ms-python.python:system",
+    // Era "ms-python.python:system", que fazia a extensão nova "Python
+    // Environments" escolher o Python global (sem PySide6) por padrão --
+    // origem do conflito de interpretador. "venv" alinha com o projeto abaixo.
+    "python-envs.defaultEnvManager": "ms-python.python:venv",
     "python-envs.pythonProjects": [
         {
             "path": ".",

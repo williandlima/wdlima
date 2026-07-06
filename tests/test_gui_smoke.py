@@ -673,6 +673,38 @@ def test_set_board_autoloads_most_recent_saved_config(qtbot, app_config, tmp_pat
     db.close()
 
 
+def test_live_chart_draws_multiple_points_from_absolute_timestamps(
+    qtbot, app_config, tmp_path: Path
+) -> None:
+    """Erro crítico (gráfico "parou de funcionar"): as amostras reais têm
+    timestamp ABSOLUTO (time.time()), não decorrido. Ao alimentar o gráfico
+    via _on_sample (o caminho real), a curva PRECISA ganhar vários pontos --
+    o bug fazia todas as amostras caírem num bin só, e o gráfico virava um
+    único ponto. Testa o pipeline de ponta a ponta (não só o histórico)."""
+    import time
+
+    from core.live_chart_history import LiveChartHistory
+    from core.sampling_buffer import Sample
+    from gui.main_window import MainWindow
+
+    db = Database(tmp_path / "live_chart_draw.db")
+    db.connect()
+    window = MainWindow(app_config, db)
+    qtbot.addWidget(window)
+
+    t0 = time.time()
+    window._live_chart_history = LiveChartHistory(duration_s=100.0, bin_count=100)
+    window.monitoring_panel.live_chart.clear()
+    for i in range(100):  # 1 amostra/s, timestamp absoluto como no app real
+        window._on_sample(
+            Sample(timestamp=t0 + i, step_index=0, voltage=5.0, current=0.5)
+        )
+
+    # A série de tensão do gráfico tem que ter MUITOS pontos, não 1.
+    assert window.monitoring_panel.live_chart._voltage_series.count() > 50
+    db.close()
+
+
 def test_live_chart_history_keeps_full_duration_visible_in_long_tests(
     qtbot, app_config, tmp_path: Path
 ) -> None:
@@ -684,6 +716,8 @@ def test_live_chart_history_keeps_full_duration_visible_in_long_tests(
     BINS, não pela quantidade de amostras -- a curva inteira (do início ao
     fim) precisa continuar visível não importa há quanto tempo o ensaio
     esteja rodando."""
+    import time
+
     from core.live_chart_history import LiveChartHistory
     from core.sampling_buffer import Sample
     from gui.main_window import MainWindow
@@ -695,27 +729,32 @@ def test_live_chart_history_keeps_full_duration_visible_in_long_tests(
 
     # Duração total pequena (10 bins) simulando um ensaio "longo" com muito
     # mais amostras do que bins -- exatamente o cenário do bug relatado.
+    # Timestamp ABSOLUTO (base epoch), como o app real produz.
+    t0 = time.time()
     window._live_chart_history = LiveChartHistory(duration_s=10.0, bin_count=10)
     for i in range(1000):
         window._on_sample(
-            Sample(timestamp=i * 0.01, step_index=0, voltage=5.0, current=0.5)
+            Sample(timestamp=t0 + i * 0.01, step_index=0, voltage=5.0, current=0.5)
         )
 
     snapshot = window._live_chart_history.snapshot()
     assert len(snapshot) == 10  # memória limitada pelo Nº DE BINS, não pelas 1000 amostras
     # A amostra do PRIMEIRO instante do ensaio continua representada -- não
     # foi descartada como seria com um FIFO de tamanho fixo.
-    assert snapshot[0].timestamp < 1.0
+    assert snapshot[0].timestamp - t0 < 1.0
     db.close()
 
 
 def test_live_chart_history_bounds_memory_regardless_of_sample_count() -> None:
+    import time
+
     from core.live_chart_history import LiveChartHistory
     from core.sampling_buffer import Sample
 
+    t0 = time.time()
     history = LiveChartHistory(duration_s=3600.0, bin_count=500)
     for i in range(100_000):
-        history.add_sample(Sample(timestamp=i * 0.05, step_index=0, voltage=5.0, current=0.5))
+        history.add_sample(Sample(timestamp=t0 + i * 0.05, step_index=0, voltage=5.0, current=0.5))
 
     assert len(history.snapshot()) <= 500
 

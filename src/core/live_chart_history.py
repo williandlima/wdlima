@@ -33,9 +33,19 @@ class LiveChartHistory:
         self._count = [0] * self._bin_count
         self._last_step_index = [0] * self._bin_count
         self._last_timestamp = [0.0] * self._bin_count
+        # As amostras carregam timestamp ABSOLUTO (time.time(), ver
+        # TestStateMachine), não o tempo decorrido do ensaio. O bin precisa
+        # do tempo relativo ao início -- sem normalizar por este t0, todas as
+        # amostras caíam no mesmo bin (índice estourava e era cortado no
+        # último), e o gráfico virava um único ponto. t0 é o instante da
+        # primeira amostra recebida.
+        self._t0: float | None = None
 
     def add_sample(self, sample: Sample) -> None:
-        index = int(sample.timestamp / self._duration_s * self._bin_count)
+        if self._t0 is None:
+            self._t0 = sample.timestamp
+        elapsed = sample.timestamp - self._t0
+        index = int(elapsed / self._duration_s * self._bin_count)
         index = min(max(index, 0), self._bin_count - 1)
         self._sum_voltage[index] += sample.voltage
         self._sum_current[index] += sample.current
@@ -44,7 +54,12 @@ class LiveChartHistory:
         self._last_timestamp[index] = sample.timestamp
 
     def snapshot(self) -> list[Sample]:
-        """Um `Sample` (média) por bin já preenchido, em ordem cronológica."""
+        """Um `Sample` (média) por bin já preenchido, em ordem cronológica.
+
+        Os timestamps devolvidos continuam ABSOLUTOS (como recebidos) -- o
+        LiveChart normaliza por conta própria (`s.timestamp - t0`), então o
+        contrato com ele fica idêntico ao do buffer de amostras cru anterior.
+        """
         return [
             Sample(
                 timestamp=self._last_timestamp[i],

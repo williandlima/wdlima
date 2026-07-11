@@ -13,11 +13,21 @@
             "cwd": "${workspaceFolder}",
             // Fixa o interpretador do venv pyside6-py311 (onde o PySide6 está
             // instalado). Sem isto, o depurador (F5) caía no Python global
-            // "recomendado" pelo seletor (ex.: Python 3.13-32), que NAO tem o
-            // PySide6 -> "ModuleNotFoundError: No module named 'PySide6'".
-            // ${env:USERPROFILE} = C:\Users\<seu_usuario>; ajuste o nome do
-            // venv aqui se voce criar o ambiente com outro nome.
-            "python": "${env:USERPROFILE}\\envs\\pyside6-py311\\Scripts\\python.exe"
+            // "recomendado" pelo seletor, que NAO tem o PySide6 ->
+            // "ModuleNotFoundError: No module named 'PySide6'".
+            //
+            // Este repositório é compartilhado entre Windows e macOS -- um
+            // caminho fixo único quebrava a outra máquina (ex.: caminho do
+            // Windows tentando rodar no Mac, "\\envs\\...\\python.exe" como
+            // comando, code 127). As chaves "windows"/"osx" abaixo sobrescrevem
+            // "python" só para a plataforma correspondente; ajuste o nome do
+            // venv em cada uma se você criar o ambiente com outro nome.
+            "windows": {
+                "python": "${env:USERPROFILE}\\envs\\pyside6-py311\\Scripts\\python.exe"
+            },
+            "osx": {
+                "python": "${env:HOME}/venvs/pyside6-py311/bin/python3"
+            }
         }
     ]
 }

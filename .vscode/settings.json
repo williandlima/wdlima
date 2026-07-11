@@ -1,10 +1,12 @@
 {
-    // Interpretador padrão: o venv pyside6-py311 (onde o PySide6 está
-    // instalado). Usado pelo terminal, pelos testes e como interpretador
-    // padrão quando nenhum outro está selecionado. ${env:USERPROFILE} =
-    // C:\Users\<seu_usuario>. O launch.json também fixa este mesmo caminho
-    // para o depurador (F5), que antes caía no Python global sem PySide6.
-    "python.defaultInterpreterPath": "${env:USERPROFILE}\\envs\\pyside6-py311\\Scripts\\python.exe",
+    // "python.defaultInterpreterPath" NÃO fica aqui de propósito: este
+    // settings.json é compartilhado (git) entre Windows e macOS, e um único
+    // caminho fixo só funciona numa das duas plataformas -- foi o que
+    // quebrou o F5/terminal na outra máquina quando isso estava fixado pro
+    // caminho do Windows. O launch.json resolve isso pro depurador (F5) com
+    // chaves "windows"/"osx" separadas. Pra terminal/testes/lint, cada
+    // pessoa seleciona o próprio venv uma vez por máquina:
+    // Cmd/Ctrl+Shift+P -> "Python: Select Interpreter" -> venv pyside6-py311.
     "python.testing.pytestEnabled": true,
     "python.testing.unittestEnabled": false,
     "python.testing.pytestArgs": [
